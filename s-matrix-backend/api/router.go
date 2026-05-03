@@ -54,6 +54,9 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "running": dep.Manager.Status(), "config": cfg})
 	})
 	secured.GET("/system/status", func(c *gin.Context) {
+		if !dep.Manager.Status() {
+			_ = dep.Manager.Start()
+		}
 		cpuVals, _ := cpu.Percent(200*time.Millisecond, false)
 		vm, _ := mem.VirtualMemory()
 		cpuPercent := 0.0
