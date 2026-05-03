@@ -12,6 +12,9 @@ import (
 func main() {
 	dbPath := env("SMATRIX_DB", "s-matrix.db")
 	addr := env("SMATRIX_ADDR", "127.0.0.1:19088")
+	configPath := env("SMATRIX_CONFIG", "./config.json")
+	logPath := env("SMATRIX_SINGBOX_LOG", "./singbox.log")
+	singboxBin := env("SMATRIX_SINGBOX_BIN", "sing-box")
 	if _, err := models.OpenDatabase(dbPath); err != nil {
 		log.Fatalf("database init failed: %v", err)
 	}
@@ -19,7 +22,8 @@ func main() {
 		log.Fatalf("generate test config failed: %v", err)
 	}
 	log.Printf("s-matrix backend listening on %s", addr)
-	if err := api.NewRouter().Run(addr); err != nil {
+	manager := singbox.NewSingboxManager(singboxBin, configPath, logPath)
+	if err := api.NewRouter(api.RouterDeps{Manager: manager, ConfigPath: configPath}).Run(addr); err != nil {
 		log.Fatal(err)
 	}
 }

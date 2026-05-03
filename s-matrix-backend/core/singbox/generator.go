@@ -62,6 +62,7 @@ type RouteRuleSet struct {
 }
 
 type RouteRule struct {
+	Inbound  string `json:"inbound,omitempty"`
 	RuleSet  string `json:"rule_set,omitempty"`
 	Outbound string `json:"outbound"`
 }
