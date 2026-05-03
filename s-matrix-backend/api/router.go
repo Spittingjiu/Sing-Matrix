@@ -27,6 +27,7 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 	v1 := r.Group("/api/v1")
 	v1.POST("/login", LoginHandler)
 	v1.GET("/sub/:token", SubscriptionHandler(dep.ConfigPath))
+	v1.GET("/discover", DiscoveryHandler(dep.ConfigPath))
 	secured := v1.Group("")
 	secured.Use(JWTMiddleware())
 	secured.GET("/singbox/test-config", func(c *gin.Context) { c.JSON(http.StatusOK, singbox.BuildTestConfig()) })

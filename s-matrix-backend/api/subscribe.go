@@ -40,6 +40,34 @@ func ShareLinksHandler(configPath string) gin.HandlerFunc {
 	}
 }
 
+func DiscoveryHandler(configPath string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		links, err := BuildShareLinks(configPath, publicHost(c))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		types := []string{}
+		for _, link := range links {
+			if strings.HasPrefix(link, "vless://") {
+				types = append(types, "vless-reality")
+			} else if strings.HasPrefix(link, "hy2://") || strings.HasPrefix(link, "hysteria2://") {
+				types = append(types, "hysteria2")
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"ok":             true,
+			"name":           "S-Matrix",
+			"kind":           "sbui",
+			"version":        "s-matrix.sub.v1",
+			"subscription":   subscriptionURL(c),
+			"links_endpoint": fmt.Sprintf("%s://%s/api/v1/singbox/share-links", forwardedScheme(c), c.Request.Host),
+			"node_count":     len(links),
+			"protocols":      types,
+		})
+	}
+}
+
 func BuildShareLinks(configPath, host string) ([]string, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -109,11 +137,15 @@ func publicHost(c *gin.Context) string {
 }
 
 func subscriptionURL(c *gin.Context) string {
+	return fmt.Sprintf("%s://%s/api/v1/sub/default", forwardedScheme(c), c.Request.Host)
+}
+
+func forwardedScheme(c *gin.Context) string {
 	scheme := c.GetHeader("X-Forwarded-Proto")
 	if scheme == "" {
 		scheme = "http"
 	}
-	return fmt.Sprintf("%s://%s/api/v1/sub/default", scheme, c.Request.Host)
+	return scheme
 }
 
 func firstStringValue(m map[string]interface{}, key, fallback string) string {
