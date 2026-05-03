@@ -3,7 +3,10 @@ import { computed, ref } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import type { Edge, Node } from '@vue-flow/core'
 import { parseTopology } from '../core/compiler/parser'
+import { apiFetch, clearToken } from '../api/http'
+import { useRouter } from 'vue-router'
 
+const router = useRouter()
 const nodes = ref<Node[]>([
   { id: 'reality-443', position: { x: 80, y: 120 }, label: 'VLESS REALITY', data: { kind: 'inbound-reality' } },
   { id: 'hy2-44300', position: { x: 80, y: 260 }, label: 'Hysteria2', data: { kind: 'inbound-hy2' } },
@@ -23,7 +26,7 @@ async function deployTopology() {
   try {
     const graph = toObject()
     const parsed = parseTopology(graph.nodes as any, graph.edges as any)
-    const res = await fetch('/api/v1/singbox/compile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(parsed) })
+    const res = await apiFetch('/api/v1/singbox/compile', { method: 'POST', body: JSON.stringify(parsed) })
     const text = await res.text()
     if (!res.ok) throw new Error(text)
     successText.value = 'SYSTEM OVERRIDE SUCCESSFUL. SING-BOX IS ONLINE.'
@@ -51,6 +54,7 @@ async function deployTopology() {
     <button :disabled="deploying" :class="deployButtonClass" class="mb-4 rounded-2xl border border-emerald-400/40 bg-emerald-500/15 px-5 py-3 font-mono text-sm font-black uppercase tracking-[0.22em] text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-wait" @click="deployTopology">
       {{ deploying ? 'DEPLOYING MATRIX...' : '一键激活 / DEPLOY MATRIX' }}
     </button>
+    <button class="mb-4 ml-3 rounded-2xl border border-slate-600 px-4 py-3 font-mono text-xs uppercase tracking-[0.2em] text-slate-300" @click="clearToken(); router.replace('/login')">Logout</button>
     </section>
     <div class="h-[640px] rounded-2xl border border-slate-800 bg-slate-900">
       <VueFlow v-model:nodes="nodes" v-model:edges="edges" fit-view-on-init />

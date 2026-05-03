@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io/fs"
 	"net/http"
 	"time"
 
@@ -15,15 +16,19 @@ type RouterDeps struct {
 	ConfigPath string
 }
 
-func NewRouter(deps ...RouterDeps) *gin.Engine {
+func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 	dep := RouterDeps{ConfigPath: "./config.json", Manager: singbox.NewSingboxManager("sing-box", "./config.json", "./singbox.log")}
 	if len(deps) > 0 {
 		dep = deps[0]
 	}
 	r := gin.Default()
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true, "name": "s-matrix-backend"}) })
-	r.GET("/api/v1/singbox/test-config", func(c *gin.Context) { c.JSON(http.StatusOK, singbox.BuildTestConfig()) })
-	r.POST("/api/v1/singbox/compile", func(c *gin.Context) {
+	v1 := r.Group("/api/v1")
+	v1.POST("/login", LoginHandler)
+	secured := v1.Group("")
+	secured.Use(JWTMiddleware())
+	secured.GET("/singbox/test-config", func(c *gin.Context) { c.JSON(http.StatusOK, singbox.BuildTestConfig()) })
+	secured.POST("/singbox/compile", func(c *gin.Context) {
 		var ui singbox.UIData
 		if err := c.ShouldBindJSON(&ui); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -40,7 +45,7 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "running": dep.Manager.Status(), "config": cfg})
 	})
-	r.GET("/api/v1/system/status", func(c *gin.Context) {
+	secured.GET("/system/status", func(c *gin.Context) {
 		cpuVals, _ := cpu.Percent(200*time.Millisecond, false)
 		vm, _ := mem.VirtualMemory()
 		cpuPercent := 0.0
@@ -56,5 +61,6 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 			"generated_at_unix": time.Now().Unix(),
 		})
 	})
+	MountStatic(r, staticFS)
 	return r
 }
