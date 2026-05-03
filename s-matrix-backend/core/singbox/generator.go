@@ -84,7 +84,6 @@ func NewRealityInbound(tag string, port int, uuid string, privateKey string, pub
 					"server_port": 443,
 				},
 				"private_key": privateKey,
-				"public_key":  publicKey,
 				"short_id":    []string{shortID},
 			},
 		},
