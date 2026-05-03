@@ -9,7 +9,12 @@ export interface SystemStatus {
 }
 
 export interface GraphPayload {
-  nodes: Array<{ id: string; kind: string; label?: string; position: { x: number; y: number }; data?: Record<string, unknown> }>
+  version?: string
+  inbounds?: unknown[]
+  outbounds?: unknown[]
+  rules?: unknown[]
+  routing?: unknown[]
+  nodes: Array<{ id: string; kind?: string; label?: string; position: { x: number; y: number }; data?: Record<string, unknown> }>
   edges: Array<{ id?: string; source: string; target: string }>
 }
 

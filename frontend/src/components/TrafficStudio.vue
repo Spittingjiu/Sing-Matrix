@@ -7,10 +7,14 @@ import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
 import MatrixNode from './MatrixNode.vue'
 import { compileGraph, generateRealityKeys } from '../api/client'
+import { parseTopology } from '../core/compiler/parser'
 
 const msg = useMessage()
 const output = ref('')
 const showOutput = ref(false)
+const deploying = ref(false)
+const successText = ref('')
+const errorText = ref('')
 const showConfig = ref(false)
 const selectedId = ref('')
 const nodeTypes = { matrix: markRaw(MatrixNode) } as any
@@ -55,17 +59,30 @@ function onNodeClick(event: { node: any }) {
 
 function graphPayload() {
   const graph = toObject()
+  const parsed = parseTopology(graph.nodes as any, graph.edges as any)
   return {
+    ...parsed,
     nodes: graph.nodes.map((n: any) => ({ id: n.id, kind: String(n.data?.kind || 'unknown'), label: String(n.data?.label || n.label || ''), position: n.position, data: n.data || {} })),
     edges: graph.edges.map((e: any) => ({ id: e.id, source: e.source, target: e.target }))
   }
 }
 
 async function compile() {
-  const result = await compileGraph(graphPayload())
-  output.value = JSON.stringify(result, null, 2)
-  showOutput.value = true
-  msg.success('拓扑已下发，配置中枢已生成 config.json')
+  deploying.value = true
+  successText.value = ''
+  errorText.value = ''
+  try {
+    const result = await compileGraph(graphPayload())
+    output.value = JSON.stringify(result, null, 2)
+    showOutput.value = true
+    successText.value = 'SYSTEM OVERRIDE SUCCESSFUL. SING-BOX IS ONLINE.'
+    msg.success(successText.value)
+    window.setTimeout(() => successText.value = '', 5200)
+  } catch (err) {
+    errorText.value = String(err)
+  } finally {
+    deploying.value = false
+  }
 }
 
 async function reality() {
@@ -80,6 +97,12 @@ async function reality() {
 </script>
 
 <template>
+  <div v-if="successText" class="mb-4 rounded-2xl border border-emerald-400/40 bg-emerald-500/10 p-4 font-mono text-sm text-emerald-200 shadow-[0_0_24px_rgba(16,185,129,.28)]">{{ successText }}</div>
+  <div v-if="errorText" class="mb-4 rounded-2xl border border-red-500/50 bg-red-950/90 p-4 shadow-[0_0_24px_rgba(239,68,68,.24)]">
+    <div class="mb-2 font-mono text-xs uppercase tracking-[0.28em] text-red-300">SING-BOX EXCEPTION INTERCEPTED</div>
+    <pre class="max-h-72 overflow-auto whitespace-pre-wrap text-xs text-red-100">{{ errorText }}</pre>
+    <button class="mt-3 rounded-lg border border-red-400/40 px-3 py-1 text-xs text-red-100" @click="errorText = ''">关闭</button>
+  </div>
   <section class="rounded-[28px] border border-emerald-500/20 bg-slate-900/55 p-5 shadow-[0_30px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl">
     <div class="mb-4 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
       <div>
@@ -92,7 +115,7 @@ async function reality() {
         <NButton size="small" ghost color="#a78bfa" @click="add('rule-srs')">SRS 规则</NButton>
         <NButton size="small" ghost color="#f59e0b" @click="add('outbound-selector')">出站选择器</NButton>
         <NButton size="small" @click="connectSelected">示例连线</NButton>
-        <NButton size="small" type="primary" @click="compile">编译配置</NButton>
+        <NButton size="small" type="primary" :loading="deploying" :class="deploying ? 'animate-pulse shadow-[0_0_30px_rgba(16,185,129,.65)]' : ''" @click="compile">{{ deploying ? 'DEPLOYING MATRIX...' : '编译配置' }}</NButton>
       </NSpace>
     </div>
 
