@@ -42,6 +42,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 
 	byID := map[string]UINode{}
 	inboundTags := map[string]string{}
+	usedPorts := map[int]bool{}
 	for _, node := range uiData.Nodes {
 		if node.ID == "" {
 			return cfg, fmt.Errorf("node id is required")
@@ -51,12 +52,20 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 		byID[node.ID] = node
 		switch kind {
 		case "inbound-hy2":
-			in := NewHysteria2Inbound(str(node.Data, "tag", node.ID), num(node.Data, "port", 44300), str(node.Data, "password", "change-me"), str(node.Data, "masquerade", "https://www.bing.com"))
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewHysteria2Inbound(str(node.Data, "tag", node.ID), port, str(node.Data, "password", "change-me"), str(node.Data, "masquerade", "https://www.bing.com"))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-reality":
 			dest := str(node.Data, "dest", str(node.Data, "server_name", "www.cloudflare.com"))
-			in := NewRealityInbound(str(node.Data, "tag", node.ID), num(node.Data, "port", 443), str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"), str(node.Data, "private_key", ""), firstShortID(node.Data), dest)
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewRealityInbound(str(node.Data, "tag", node.ID), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"), str(node.Data, "private_key", ""), firstShortID(node.Data), dest)
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "outbound-direct":

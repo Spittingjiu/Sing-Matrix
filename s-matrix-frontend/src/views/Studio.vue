@@ -44,13 +44,22 @@ function randomHex(bytes = 8) {
   return Array.from(buf, b => b.toString(16).padStart(2, '0')).join('')
 }
 
+async function availablePort(preferred = 0) {
+  try {
+    const res = await apiFetch(`/api/v1/ports/available?preferred=${preferred}`)
+    if (res.ok) return Number((await res.json()).port)
+  } catch {}
+  return 50000 + Math.floor(Math.random() * 10001)
+}
+
 function randomPort() {
   return 50000 + Math.floor(Math.random() * 10001)
 }
 
-function blueprint(name: 'reality' | 'hy2' | 'matrix') {
-  const hy2Port = randomPort()
-  const reality = { id: 'bp-reality', position: { x: 80, y: 120 }, label: '隐匿堡垒 REALITY', data: { kind: 'inbound-reality', tag: 'reality-443', port: 443, dest: 'www.microsoft.com', short_id: randomHex(8), private_key: randomHex(32), uuid: crypto.randomUUID?.() || '00000000-0000-0000-0000-000000000000' } }
+async function blueprint(name: 'reality' | 'hy2' | 'matrix') {
+  const realityPort = await availablePort(0)
+  const hy2Port = await availablePort(randomPort())
+  const reality = { id: 'bp-reality', position: { x: 80, y: 120 }, label: '隐匿堡垒 REALITY', data: { kind: 'inbound-reality', tag: 'reality-443', port: realityPort, dest: 'www.microsoft.com', short_id: randomHex(8), private_key: randomHex(32), uuid: crypto.randomUUID?.() || '00000000-0000-0000-0000-000000000000' } }
   const hy2 = { id: 'bp-hy2', position: { x: 80, y: 300 }, label: '极限飙车 HY2', data: { kind: 'inbound-hy2', tag: 'hy2-boost', port: hy2Port, password: randomPassword(), up_mbps: 1000, down_mbps: 1000, masquerade: 'https://www.bing.com' } }
   const rule = { id: 'bp-rule-global', position: { x: 420, y: 210 }, label: 'Global SRS Matrix', data: { kind: 'rule-srs', tag: 'global', url: 'https://example.com/global.srs' } }
   const out = { id: 'bp-direct', position: { x: 760, y: 210 }, label: 'Direct Outbound', data: { kind: 'outbound-direct', tag: 'direct' } }
@@ -64,7 +73,7 @@ async function runBlueprint(name: 'reality' | 'hy2' | 'matrix') {
   blueprintReady.value = false
   nodes.value = []
   edges.value = []
-  const bp = blueprint(name)
+  const bp = await blueprint(name)
   for (const node of bp.nodes) {
     await new Promise(resolve => setTimeout(resolve, 330))
     nodes.value.push(node as any)

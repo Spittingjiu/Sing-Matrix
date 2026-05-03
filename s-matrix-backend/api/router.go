@@ -32,6 +32,7 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 	secured.GET("/singbox/test-config", func(c *gin.Context) { c.JSON(http.StatusOK, singbox.BuildTestConfig()) })
 	secured.GET("/singbox/share-links", ShareLinksHandler(dep.ConfigPath))
 	secured.GET("/logs/ws", LogsWSHandler(dep.LogPath))
+	secured.GET("/ports/available", AvailablePortHandler)
 	secured.POST("/singbox/compile", func(c *gin.Context) {
 		var ui singbox.UIData
 		if err := c.ShouldBindJSON(&ui); err != nil {
