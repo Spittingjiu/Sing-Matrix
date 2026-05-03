@@ -59,12 +59,25 @@ func BuildShareLinks(configPath, host string) ([]string, error) {
 			uuid := firstUserValue(in, "uuid", "00000000-0000-0000-0000-000000000000")
 			tls, _ := in["tls"].(map[string]interface{})
 			reality, _ := tls["reality"].(map[string]interface{})
-			pbk := strMap(reality, "public_key", strMap(reality, "private_key", ""))
+			meta := loadClientInboundMeta(configPath, tag)
+			pbk := meta["public_key"]
+			if pbk == "" {
+				pbk = strMap(reality, "public_key", "")
+			}
+			sid := meta["short_id"]
+			if sid == "" {
+				sid = firstStringValue(reality, "short_id", "")
+			}
 			sni := strMap(tls, "server_name", "www.cloudflare.com")
 			q := url.Values{}
 			q.Set("security", "reality")
+			q.Set("encryption", "none")
 			q.Set("pbk", pbk)
 			q.Set("sni", sni)
+			if sid != "" {
+				q.Set("sid", sid)
+			}
+			q.Set("spx", "/")
 			q.Set("fp", "chrome")
 			q.Set("type", "tcp")
 			q.Set("flow", "xtls-rprx-vision")
@@ -101,6 +114,54 @@ func subscriptionURL(c *gin.Context) string {
 		scheme = "http"
 	}
 	return fmt.Sprintf("%s://%s/api/v1/sub/default", scheme, c.Request.Host)
+}
+
+func firstStringValue(m map[string]interface{}, key, fallback string) string {
+	if m == nil {
+		return fallback
+	}
+	v, ok := m[key]
+	if !ok || v == nil {
+		return fallback
+	}
+	switch x := v.(type) {
+	case string:
+		if x != "" {
+			return x
+		}
+	case []interface{}:
+		if len(x) > 0 {
+			if s, ok := x[0].(string); ok && s != "" {
+				return s
+			}
+		}
+	case []string:
+		if len(x) > 0 && x[0] != "" {
+			return x[0]
+		}
+	}
+	return fallback
+}
+
+func loadClientInboundMeta(configPath, tag string) map[string]string {
+	out := map[string]string{}
+	data, err := os.ReadFile(configPath + ".client.json")
+	if err != nil {
+		return out
+	}
+	var root struct {
+		Inbounds map[string]map[string]string `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return out
+	}
+	if root.Inbounds == nil {
+		return out
+	}
+	if m, ok := root.Inbounds[tag]; ok && m != nil {
+		return m
+	}
+	return out
 }
 
 func strMap(m map[string]interface{}, key, fallback string) string {

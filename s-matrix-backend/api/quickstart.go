@@ -3,8 +3,10 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -58,6 +60,7 @@ func QuickHY2Handler(dep quickDeps) gin.HandlerFunc {
 }
 
 func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string, port int) {
+	_ = writeClientMeta(dep.ConfigPath, topo)
 	cfg, err := singbox.CompileAndWrite(topo, dep.ConfigPath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -80,6 +83,40 @@ func singleInboundTopology(id, kind string, port int, data map[string]interface{
 		},
 		Edges: []singbox.UIEdge{{ID: "e-" + id + "-direct", Source: id, Target: outID}},
 	}
+}
+
+func writeClientMeta(configPath string, topo singbox.UIData) error {
+	meta := map[string]map[string]string{}
+	for _, n := range topo.Nodes {
+		tag := ""
+		if n.Data != nil {
+			if v, ok := n.Data["tag"].(string); ok {
+				tag = v
+			}
+		}
+		if tag == "" {
+			tag = n.ID
+		}
+		entry := map[string]string{}
+		for _, k := range []string{"public_key", "short_id"} {
+			if n.Data != nil {
+				if v, ok := n.Data[k].(string); ok && v != "" {
+					entry[k] = v
+				}
+			}
+		}
+		if len(entry) > 0 {
+			meta[tag] = entry
+		}
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	data, err := json.MarshalIndent(map[string]interface{}{"inbounds": meta}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath+".client.json", data, 0644)
 }
 
 func generateRealityMaterial(bin string) map[string]string {
