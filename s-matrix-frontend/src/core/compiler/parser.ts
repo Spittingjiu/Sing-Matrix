@@ -57,7 +57,15 @@ export interface ParsedTopology {
 }
 
 function kindOf(node: FlowNodeLike): MatrixKind {
-  return String(node.data?.kind || node.type || '')
+  const raw = String(node.data?.kind || node.type || '').toLowerCase().trim()
+  const label = `${node.data?.label || ''} ${node.label || ''} ${node.id || ''} ${node.data?.tag || ''}`.toLowerCase()
+  if (!raw || raw === 'default' || raw === 'matrix' || raw === 'custom' || raw === 'aa') {
+    if (label.includes('hy2') || label.includes('hysteria')) return 'inbound-hy2'
+    if (label.includes('reality') || label.includes('vless')) return 'inbound-reality'
+    if (label.includes('rule') || label.includes('srs')) return 'rule-srs'
+    return 'outbound-custom'
+  }
+  return raw
 }
 
 function tagOf(node: FlowNodeLike): string {
@@ -123,7 +131,12 @@ export function parseRouting(nodes: FlowNodeLike[], edges: FlowEdgeLike[]): Pars
   for (const edge of edges) {
     const source = byId.get(edge.source)
     const rule = byId.get(edge.target)
-    if (!source || !rule || !isInbound(source) || !isRule(rule)) continue
+    if (!source || !rule || !isInbound(source)) continue
+    if (isOutbound(rule)) {
+      routing.push({ inboundTag: tagOf(source), inboundId: source.id, ruleSet: '', ruleId: '', outboundTag: tagOf(rule), outboundId: rule.id })
+      continue
+    }
+    if (!isRule(rule)) continue
 
     const nextEdges = outboundEdges.get(rule.id) || []
     for (const next of nextEdges) {

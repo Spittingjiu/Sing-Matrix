@@ -20,10 +20,7 @@ type UINode struct {
 	Data     map[string]interface{} `json:"data"`
 }
 
-type UIPosition struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-}
+type UIPosition struct{ X, Y float64 }
 
 type UIEdge struct {
 	ID     string `json:"id"`
@@ -32,14 +29,7 @@ type UIEdge struct {
 }
 
 func CompileToSingbox(uiData UIData) (Config, error) {
-	cfg := Config{
-		Log:       &Log{Level: "info", Timestamp: true},
-		DNS:       &DNS{Servers: []DNSServer{{Tag: "cloudflare", Address: "https://1.1.1.1/dns-query"}, {Tag: "alidns", Address: "https://dns.alidns.com/dns-query"}}},
-		Inbounds:  []Inbound{},
-		Outbounds: []Outbound{{Type: "direct", Tag: "direct"}, {Type: "block", Tag: "block"}},
-		Route:     Route{RuleSets: []RouteRuleSet{}, Rules: []RouteRule{}, Final: "direct"},
-	}
-
+	cfg := Config{Log: &Log{Level: "info", Timestamp: true}, DNS: &DNS{Servers: []DNSServer{}}, Inbounds: []Inbound{}, Outbounds: []Outbound{{Type: "direct", Tag: "direct"}, {Type: "block", Tag: "block"}}, Route: Route{RuleSets: []RouteRuleSet{}, Rules: []RouteRule{}, Final: "direct"}}
 	byID := map[string]UINode{}
 	inboundTags := map[string]string{}
 	usedPorts := map[int]bool{}
@@ -56,7 +46,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewHysteria2Inbound(str(node.Data, "tag", node.ID), port, str(node.Data, "password", "change-me"), str(node.Data, "masquerade", "https://www.bing.com"))
+			in := NewHysteria2Inbound(tagOf(node), port, str(node.Data, "password", "change-me"), str(node.Data, "masquerade", "https://www.bing.com"))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-reality":
@@ -65,21 +55,21 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewRealityInbound(str(node.Data, "tag", node.ID), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"), str(node.Data, "private_key", ""), firstShortID(node.Data), dest)
+			in := NewRealityInbound(tagOf(node), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"), str(node.Data, "private_key", ""), firstShortID(node.Data), dest)
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "outbound-direct":
-			tag := str(node.Data, "tag", "direct")
-			if tag != "direct" {
+			if tag := tagOf(node); tag != "direct" {
 				cfg.Outbounds = append(cfg.Outbounds, Outbound{Type: "direct", Tag: tag})
 			}
 		case "outbound-selector":
-			cfg.Outbounds = append(cfg.Outbounds, Outbound{Type: "selector", Tag: str(node.Data, "tag", node.ID)})
+			cfg.Outbounds = append(cfg.Outbounds, Outbound{Type: "selector", Tag: tagOf(node)})
+		case "outbound-custom":
+			cfg.Outbounds = append(cfg.Outbounds, Outbound{Type: "direct", Tag: tagOf(node)})
 		case "rule-srs":
-			cfg.Route.RuleSets = append(cfg.Route.RuleSets, RouteRuleSet{Type: "remote", Tag: str(node.Data, "tag", node.ID), Format: "binary", URL: str(node.Data, "url", "")})
+			cfg.Route.RuleSets = append(cfg.Route.RuleSets, RouteRuleSet{Type: "remote", Tag: tagOf(node), Format: "binary", URL: str(node.Data, "url", "")})
 		}
 	}
-
 	inboundToRule := map[string][]string{}
 	ruleToOutbound := map[string][]string{}
 	for _, edge := range uiData.Edges {
@@ -92,11 +82,13 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 		if strings.HasPrefix(srcKind, "inbound-") && dstKind == "rule-srs" {
 			inboundToRule[src.ID] = append(inboundToRule[src.ID], dst.ID)
 		}
+		if strings.HasPrefix(srcKind, "inbound-") && strings.HasPrefix(dstKind, "outbound-") {
+			cfg.Route.Rules = append(cfg.Route.Rules, RouteRule{Inbound: inboundTags[src.ID], Outbound: tagOf(dst)})
+		}
 		if srcKind == "rule-srs" && strings.HasPrefix(dstKind, "outbound-") {
-			ruleToOutbound[src.ID] = append(ruleToOutbound[src.ID], outboundTag(dst))
+			ruleToOutbound[src.ID] = append(ruleToOutbound[src.ID], tagOf(dst))
 		}
 	}
-
 	for inboundID, ruleIDs := range inboundToRule {
 		for _, ruleID := range ruleIDs {
 			outs := ruleToOutbound[ruleID]
@@ -104,7 +96,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 				outs = []string{"direct"}
 			}
 			for _, out := range outs {
-				cfg.Route.Rules = append(cfg.Route.Rules, RouteRule{Inbound: inboundTags[inboundID], RuleSet: str(byID[ruleID].Data, "tag", ruleID), Outbound: out})
+				cfg.Route.Rules = append(cfg.Route.Rules, RouteRule{Inbound: inboundTags[inboundID], RuleSet: tagOf(byID[ruleID]), Outbound: out})
 			}
 		}
 	}
@@ -124,14 +116,26 @@ func CompileAndWrite(uiData UIData, path string) (Config, error) {
 }
 
 func nodeKind(node UINode) string {
-	if node.Kind != "" {
-		return node.Kind
+	kind := strings.ToLower(strings.TrimSpace(node.Kind))
+	if kind == "" {
+		kind = strings.ToLower(strings.TrimSpace(str(node.Data, "kind", "")))
 	}
-	return str(node.Data, "kind", "")
+	label := strings.ToLower(strings.TrimSpace(node.Label + " " + node.ID + " " + str(node.Data, "label", "") + " " + str(node.Data, "tag", "")))
+	if kind == "" || kind == "default" || kind == "matrix" || kind == "custom" || kind == "aa" {
+		switch {
+		case strings.Contains(label, "hy2") || strings.Contains(label, "hysteria"):
+			return "inbound-hy2"
+		case strings.Contains(label, "reality") || strings.Contains(label, "vless"):
+			return "inbound-reality"
+		case strings.Contains(label, "rule") || strings.Contains(label, "srs"):
+			return "rule-srs"
+		default:
+			return "outbound-custom"
+		}
+	}
+	return kind
 }
-
-func outboundTag(node UINode) string { return str(node.Data, "tag", node.ID) }
-
+func tagOf(node UINode) string { return str(node.Data, "tag", node.ID) }
 func str(data map[string]interface{}, key, fallback string) string {
 	if data == nil {
 		return fallback
@@ -141,7 +145,6 @@ func str(data map[string]interface{}, key, fallback string) string {
 	}
 	return fallback
 }
-
 func num(data map[string]interface{}, key string, fallback int) int {
 	if data == nil {
 		return fallback
@@ -159,7 +162,6 @@ func num(data map[string]interface{}, key string, fallback int) int {
 	}
 	return fallback
 }
-
 func firstShortID(data map[string]interface{}) string {
 	raw := str(data, "short_id", str(data, "short_ids", ""))
 	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ';' || r == ' ' || r == '\n' })
