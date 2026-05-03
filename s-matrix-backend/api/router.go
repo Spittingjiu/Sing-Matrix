@@ -25,9 +25,11 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true, "name": "s-matrix-backend"}) })
 	v1 := r.Group("/api/v1")
 	v1.POST("/login", LoginHandler)
+	v1.GET("/sub/:token", SubscriptionHandler(dep.ConfigPath))
 	secured := v1.Group("")
 	secured.Use(JWTMiddleware())
 	secured.GET("/singbox/test-config", func(c *gin.Context) { c.JSON(http.StatusOK, singbox.BuildTestConfig()) })
+	secured.GET("/singbox/share-links", ShareLinksHandler(dep.ConfigPath))
 	secured.POST("/singbox/compile", func(c *gin.Context) {
 		var ui singbox.UIData
 		if err := c.ShouldBindJSON(&ui); err != nil {
