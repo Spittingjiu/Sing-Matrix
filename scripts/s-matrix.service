@@ -1,0 +1,22 @@
+[Unit]
+Description=S-Matrix Sing-Box Command Center
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/etc/s-matrix/
+Environment=SMATRIX_ADDR=0.0.0.0:19088
+Environment=SMATRIX_DB=/etc/s-matrix/matrix.db
+Environment=SMATRIX_CONFIG=/etc/s-matrix/config.json
+Environment=SMATRIX_SINGBOX_LOG=/etc/s-matrix/singbox.log
+Environment=SMATRIX_SINGBOX_BIN=/usr/local/bin/sing-box
+ExecStart=/usr/local/bin/s-matrix
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
