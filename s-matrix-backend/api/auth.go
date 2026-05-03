@@ -43,11 +43,16 @@ func LoginHandler(c *gin.Context) {
 func JWTMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
+		raw := ""
+		if strings.HasPrefix(auth, "Bearer ") {
+			raw = strings.TrimPrefix(auth, "Bearer ")
+		} else if q := c.Query("token"); q != "" {
+			raw = q
+		}
+		if raw == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
 			return
 		}
-		raw := strings.TrimPrefix(auth, "Bearer ")
 		token, err := jwt.Parse(raw, func(token *jwt.Token) (interface{}, error) { return jwtSecret, nil })
 		if err != nil || !token.Valid {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})

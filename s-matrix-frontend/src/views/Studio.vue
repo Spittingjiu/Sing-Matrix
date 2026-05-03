@@ -5,6 +5,7 @@ import type { Edge, Node } from '@vue-flow/core'
 import { parseTopology } from '../core/compiler/parser'
 import { apiFetch, clearToken, getToken } from '../api/http'
 import QrcodeVue from 'qrcode.vue'
+import Terminal from './Terminal.vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
@@ -83,6 +84,7 @@ async function deployTopology() {
     <div class="h-[640px] rounded-2xl border border-slate-800 bg-slate-900">
       <VueFlow v-model:nodes="nodes" v-model:edges="edges" fit-view-on-init />
     </div>
+    <Terminal />
   <div v-if="shareDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 backdrop-blur">
       <section class="max-h-[86vh] w-full max-w-3xl overflow-auto rounded-[28px] border border-emerald-500/30 bg-slate-950 p-6 shadow-[0_0_80px_rgba(16,185,129,.18)]">
         <div class="mb-5 flex items-center justify-between">

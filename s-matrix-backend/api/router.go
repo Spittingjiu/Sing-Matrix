@@ -14,10 +14,11 @@ import (
 type RouterDeps struct {
 	Manager    *singbox.SingboxManager
 	ConfigPath string
+	LogPath    string
 }
 
 func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
-	dep := RouterDeps{ConfigPath: "./config.json", Manager: singbox.NewSingboxManager("sing-box", "./config.json", "./singbox.log")}
+	dep := RouterDeps{ConfigPath: "./config.json", LogPath: "./singbox.log", Manager: singbox.NewSingboxManager("sing-box", "./config.json", "./singbox.log")}
 	if len(deps) > 0 {
 		dep = deps[0]
 	}
@@ -30,6 +31,7 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 	secured.Use(JWTMiddleware())
 	secured.GET("/singbox/test-config", func(c *gin.Context) { c.JSON(http.StatusOK, singbox.BuildTestConfig()) })
 	secured.GET("/singbox/share-links", ShareLinksHandler(dep.ConfigPath))
+	secured.GET("/logs/ws", LogsWSHandler(dep.LogPath))
 	secured.POST("/singbox/compile", func(c *gin.Context) {
 		var ui singbox.UIData
 		if err := c.ShouldBindJSON(&ui); err != nil {

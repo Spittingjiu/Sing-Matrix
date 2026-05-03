@@ -23,7 +23,7 @@ func main() {
 	}
 	log.Printf("s-matrix backend listening on %s", addr)
 	manager := singbox.NewSingboxManager(singboxBin, configPath, logPath)
-	if err := api.NewRouter(staticFiles, api.RouterDeps{Manager: manager, ConfigPath: configPath}).Run(addr); err != nil {
+	if err := api.NewRouter(staticFiles, api.RouterDeps{Manager: manager, ConfigPath: configPath, LogPath: logPath}).Run(addr); err != nil {
 		log.Fatal(err)
 	}
 }
