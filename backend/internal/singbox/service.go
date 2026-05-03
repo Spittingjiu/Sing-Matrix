@@ -34,6 +34,13 @@ func (s Service) Reload() error {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("sing-box check failed: %s: %w", string(out), err)
 	}
+	if s.RuntimeConfig != "" && s.RuntimeConfig != s.GeneratedConfig {
+		if data, err := os.ReadFile(s.GeneratedConfig); err == nil {
+			_ = os.MkdirAll(filepath.Dir(s.RuntimeConfig), 0755)
+			_ = os.WriteFile(s.RuntimeConfig, data, 0644)
+		}
+	}
+	_ = exec.Command("systemctl", "restart", "sing-box").Run()
 	return nil
 }
 

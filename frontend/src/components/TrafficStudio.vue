@@ -1,79 +1,148 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { NButton, NCard, NDrawer, NDrawerContent, NInput, NSpace, useMessage } from 'naive-ui'
-import { VueFlow, useVueFlow, type Node, type Edge } from '@vue-flow/core'
+import { computed, markRaw, ref } from 'vue'
+import { NButton, NDrawer, NDrawerContent, NInput, NInputNumber, NSpace, useMessage } from 'naive-ui'
+import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
+import MatrixNode from './MatrixNode.vue'
 import { compileGraph, generateRealityKeys } from '../api/client'
 
 const msg = useMessage()
 const output = ref('')
 const showOutput = ref(false)
+const showConfig = ref(false)
+const selectedId = ref('')
+const nodeTypes = { matrix: markRaw(MatrixNode) } as any
 const { addNodes, addEdges, toObject } = useVueFlow()
 
-const nodes = ref<Node[]>([
-  { id: 'hy2-main', type: 'default', position: { x: 80, y: 120 }, label: 'HY2 Inbound', data: { kind: 'inbound-hy2', tag: 'hy2-main', port: 44300, password: 'change-me' } },
-  { id: 'srs-youtube', type: 'default', position: { x: 380, y: 120 }, label: 'SRS: YouTube', data: { kind: 'rule-srs', url: 'https://example.com/youtube.srs' } },
-  { id: 'direct-v6', type: 'default', position: { x: 680, y: 120 }, label: 'IPv6 Direct', data: { kind: 'outbound-direct', tag: 'direct' } }
+const nodes = ref<any[]>([
+  { id: 'hy2-main', type: 'matrix', position: { x: 80, y: 140 }, label: 'HY2 Inbound', data: { kind: 'inbound-hy2', label: 'HY2 Inbound', tag: 'hy2-main', port: 44300, password: 'change-me', up_mbps: 100, down_mbps: 300, masquerade: 'https://www.bing.com' } },
+  { id: 'reality-443', type: 'matrix', position: { x: 80, y: 360 }, label: 'REALITY Inbound', data: { kind: 'inbound-reality', label: 'REALITY Inbound', tag: 'reality-443', port: 443, dest: 'www.cloudflare.com', short_id: '0123456789abcdef', private_key: '', uuid: '00000000-0000-0000-0000-000000000000' } },
+  { id: 'srs-youtube', type: 'matrix', position: { x: 420, y: 230 }, label: 'SRS: YouTube', data: { kind: 'rule-srs', label: 'SRS: YouTube', tag: 'youtube', url: 'https://example.com/youtube.srs' } },
+  { id: 'direct-v6', type: 'matrix', position: { x: 760, y: 230 }, label: 'IPv6 Direct', data: { kind: 'outbound-direct', label: 'IPv6 Direct', tag: 'direct' } }
 ])
-const edges = ref<Edge[]>([
-  { id: 'e1', source: 'hy2-main', target: 'srs-youtube' },
-  { id: 'e2', source: 'srs-youtube', target: 'direct-v6' }
+const edges = ref<any[]>([
+  { id: 'e1', source: 'hy2-main', target: 'srs-youtube', animated: true, style: { stroke: '#34d399', strokeWidth: 2 } },
+  { id: 'e2', source: 'reality-443', target: 'srs-youtube', animated: true, style: { stroke: '#22d3ee', strokeWidth: 2 } },
+  { id: 'e3', source: 'srs-youtube', target: 'direct-v6', animated: true, style: { stroke: '#a78bfa', strokeWidth: 2 } }
 ])
+
+const selectedNode = computed(() => nodes.value.find(n => n.id === selectedId.value) || null)
+const selectedData = computed(() => selectedNode.value?.data as Record<string, any> | undefined)
+const selectedKind = computed(() => String(selectedData.value?.kind || ''))
+
+function defaultData(kind: string, id: string) {
+  if (kind === 'inbound-hy2') return { kind, label: 'HY2 Inbound', tag: id, port: 44300, password: 'change-me', up_mbps: 100, down_mbps: 300, masquerade: 'https://www.bing.com' }
+  if (kind === 'inbound-reality') return { kind, label: 'REALITY Inbound', tag: id, port: 443, dest: 'www.cloudflare.com', short_id: '', private_key: '', uuid: '00000000-0000-0000-0000-000000000000' }
+  if (kind === 'rule-srs') return { kind, label: 'SRS Rule', tag: id, url: 'https://example.com/rule.srs' }
+  return { kind, label: 'Outbound', tag: id }
+}
 
 function add(kind: string) {
   const id = `${kind}-${Date.now().toString(36)}`
-  addNodes([{ id, position: { x: 120, y: 260 }, label: kind, data: { kind, tag: id } }])
+  addNodes([{ id, type: 'matrix', position: { x: 160, y: 280 }, label: kind, data: defaultData(kind, id) }])
 }
 
 function connectSelected() {
-  addEdges([{ id: `e-${Date.now()}`, source: 'srs-youtube', target: 'direct-v6' }])
+  addEdges([{ id: `e-${Date.now()}`, source: 'srs-youtube', target: 'direct-v6', animated: true, style: { stroke: '#34d399', strokeWidth: 2 } }])
+}
+
+function onNodeClick(event: { node: any }) {
+  selectedId.value = event.node.id
+  showConfig.value = true
+}
+
+function graphPayload() {
+  const graph = toObject()
+  return {
+    nodes: graph.nodes.map((n: any) => ({ id: n.id, kind: String(n.data?.kind || 'unknown'), label: String(n.data?.label || n.label || ''), position: n.position, data: n.data || {} })),
+    edges: graph.edges.map((e: any) => ({ id: e.id, source: e.source, target: e.target }))
+  }
 }
 
 async function compile() {
-  const graph = toObject()
-  const payload = {
-    nodes: graph.nodes.map((n: Node) => ({ id: n.id, kind: String(n.data?.kind || 'unknown'), label: String(n.label || ''), position: n.position, data: n.data || {} })),
-    edges: graph.edges.map((e: Edge) => ({ id: e.id, source: e.source, target: e.target }))
-  }
-  const result = await compileGraph(payload)
+  const result = await compileGraph(graphPayload())
   output.value = JSON.stringify(result, null, 2)
   showOutput.value = true
-  msg.success('已编译为 sing-box JSON')
+  msg.success('拓扑已下发，配置中枢已生成 config.json')
 }
 
 async function reality() {
-  output.value = JSON.stringify(await generateRealityKeys(), null, 2)
+  const keys = await generateRealityKeys() as Record<string, any>
+  if (selectedData.value && selectedKind.value === 'inbound-reality') {
+    selectedData.value.short_id = keys.short_id || selectedData.value.short_id
+    selectedData.value.private_key = keys.private_key || selectedData.value.private_key
+  }
+  output.value = JSON.stringify(keys, null, 2)
   showOutput.value = true
 }
 </script>
 
 <template>
-  <NCard class="glass" title="Traffic Studio / 节点路由编排器">
-    <template #header-extra>
+  <section class="rounded-[28px] border border-emerald-500/20 bg-slate-900/55 p-5 shadow-[0_30px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+    <div class="mb-4 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+      <div>
+        <p class="font-mono text-xs uppercase tracking-[0.34em] text-emerald-300">Traffic Studio</p>
+        <h2 class="mt-1 text-2xl font-black text-white">节点路由编排器</h2>
+      </div>
       <NSpace>
-        <NButton size="small" @click="add('inbound-reality')">REALITY 入站</NButton>
-        <NButton size="small" @click="add('rule-srs')">SRS 规则</NButton>
-        <NButton size="small" @click="add('outbound-selector')">出站选择器</NButton>
+        <NButton size="small" ghost color="#34d399" @click="add('inbound-reality')">REALITY 入站</NButton>
+        <NButton size="small" ghost color="#22d3ee" @click="add('inbound-hy2')">HY2 入站</NButton>
+        <NButton size="small" ghost color="#a78bfa" @click="add('rule-srs')">SRS 规则</NButton>
+        <NButton size="small" ghost color="#f59e0b" @click="add('outbound-selector')">出站选择器</NButton>
         <NButton size="small" @click="connectSelected">示例连线</NButton>
         <NButton size="small" type="primary" @click="compile">编译配置</NButton>
-        <NButton size="small" secondary @click="reality">生成 REALITY Key</NButton>
       </NSpace>
-    </template>
+    </div>
 
-    <div class="h-[620px] overflow-hidden rounded-2xl border border-slate-700 bg-slate-950/80">
-      <VueFlow v-model:nodes="nodes" v-model:edges="edges" fit-view-on-init>
-        <Background pattern-color="#14b8a6" :gap="24" />
+    <div class="h-[660px] overflow-hidden rounded-[24px] border border-slate-700/80 bg-[radial-gradient(circle_at_30%_20%,rgba(16,185,129,0.16),transparent_30%),radial-gradient(circle_at_70%_60%,rgba(34,211,238,0.12),transparent_28%),#020617]">
+      <VueFlow v-model:nodes="nodes" v-model:edges="edges" :node-types="nodeTypes" fit-view-on-init @node-click="onNodeClick">
+        <Background pattern-color="#0f766e" :gap="28" />
         <Controls />
-        <MiniMap />
+        <MiniMap pannable zoomable />
       </VueFlow>
     </div>
-  </NCard>
+  </section>
 
-  <NDrawer v-model:show="showOutput" width="560">
-    <NDrawerContent title="输出 JSON">
-      <NInput v-model:value="output" type="textarea" :autosize="{ minRows: 24 }" readonly />
+  <NDrawer v-model:show="showConfig" width="460" placement="right">
+    <NDrawerContent :title="selectedData?.label || 'Node Config'">
+      <div v-if="selectedData" class="space-y-5 text-slate-300">
+        <div class="rounded-2xl border border-emerald-500/20 bg-slate-950/80 p-4">
+          <div class="font-mono text-xs uppercase tracking-[0.3em] text-emerald-300">{{ selectedKind }}</div>
+          <div class="mt-2 text-xl font-black text-white">{{ selectedData.tag }}</div>
+        </div>
+
+        <template v-if="selectedKind === 'inbound-hy2'">
+          <label class="block text-sm">Listen Port<NInputNumber v-model:value="selectedData.port" class="mt-2 w-full" /></label>
+          <label class="block text-sm">Password<NInput v-model:value="selectedData.password" class="mt-2" /></label>
+          <label class="block text-sm">Up Mbps<NInputNumber v-model:value="selectedData.up_mbps" class="mt-2 w-full" /></label>
+          <label class="block text-sm">Down Mbps<NInputNumber v-model:value="selectedData.down_mbps" class="mt-2 w-full" /></label>
+        </template>
+
+        <template v-else-if="selectedKind === 'inbound-reality'">
+          <label class="block text-sm">Listen Port<NInputNumber v-model:value="selectedData.port" class="mt-2 w-full" /></label>
+          <label class="block text-sm">Dest 目标网站<NInput v-model:value="selectedData.dest" class="mt-2" /></label>
+          <label class="block text-sm">Short IDs<NInput v-model:value="selectedData.short_id" class="mt-2" /></label>
+          <label class="block text-sm">Private Key<NInput v-model:value="selectedData.private_key" class="mt-2" type="textarea" /></label>
+          <NButton type="primary" block @click="reality">一键生成 REALITY Key</NButton>
+        </template>
+
+        <template v-else-if="selectedKind === 'rule-srs'">
+          <label class="block text-sm">RuleSet Tag<NInput v-model:value="selectedData.tag" class="mt-2" /></label>
+          <label class="block text-sm">Remote SRS URL<NInput v-model:value="selectedData.url" class="mt-2" /></label>
+        </template>
+
+        <template v-else>
+          <label class="block text-sm">Outbound Tag<NInput v-model:value="selectedData.tag" class="mt-2" /></label>
+        </template>
+      </div>
+    </NDrawerContent>
+  </NDrawer>
+
+  <NDrawer v-model:show="showOutput" width="620">
+    <NDrawerContent title="编译输出 config.json">
+      <NInput v-model:value="output" type="textarea" :autosize="{ minRows: 26 }" readonly />
     </NDrawerContent>
   </NDrawer>
 </template>

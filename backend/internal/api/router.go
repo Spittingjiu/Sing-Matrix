@@ -56,6 +56,9 @@ func NewRouter(dep Dependencies) *gin.Engine {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		if err := svc.Reload(); err != nil {
+			c.Header("X-SMatrix-Reload-Warning", err.Error())
+		}
 		c.Data(http.StatusOK, "application/json; charset=utf-8", data)
 	})
 	v1.POST("/singbox/reload", func(c *gin.Context) {
