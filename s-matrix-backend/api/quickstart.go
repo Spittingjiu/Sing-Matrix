@@ -22,14 +22,23 @@ type quickDeps struct {
 
 func QuickRealityHandler(dep quickDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		var req struct {
+			Remark string `json:"remark"`
+		}
+		_ = c.ShouldBindJSON(&req)
+		remark := strings.TrimSpace(req.Remark)
+
 		keys := generateRealityMaterial("/usr/local/bin/sing-box")
 		port := singbox.PickAvailablePort(0, map[int]bool{})
 		if port == 0 {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no available port"})
 			return
 		}
-		topo := singleInboundTopology("reality-oneclick", "inbound-reality", port, map[string]interface{}{
-			"tag":         "reality-oneclick",
+		if remark == "" {
+			remark = fmt.Sprintf("REALITY :%d", port)
+		}
+		topo := singleInboundTopology("reality-oneclick", "inbound-reality", port, remark, map[string]interface{}{
+			"tag":         remark,
 			"port":        port,
 			"uuid":        randomUUIDLike(),
 			"dest":        "www.microsoft.com",
@@ -44,13 +53,22 @@ func QuickRealityHandler(dep quickDeps) gin.HandlerFunc {
 
 func QuickHY2Handler(dep quickDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		var req struct {
+			Remark string `json:"remark"`
+		}
+		_ = c.ShouldBindJSON(&req)
+		remark := strings.TrimSpace(req.Remark)
+
 		port := singbox.PickAvailablePort(0, map[int]bool{})
 		if port == 0 {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no available port"})
 			return
 		}
-		topo := singleInboundTopology("hy2-oneclick", "inbound-hy2", port, map[string]interface{}{
-			"tag":        "hy2-oneclick",
+		if remark == "" {
+			remark = fmt.Sprintf("HY2 :%d", port)
+		}
+		topo := singleInboundTopology("hy2-oneclick", "inbound-hy2", port, remark, map[string]interface{}{
+			"tag":        remark,
 			"port":       port,
 			"password":   randomToken(28),
 			"masquerade": "https://www.bing.com",
@@ -74,11 +92,15 @@ func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string
 	c.JSON(http.StatusOK, gin.H{"ok": true, "type": typ, "port": port, "nodes": topo.Nodes, "edges": topo.Edges, "links": links, "subscription": subscriptionURL(c), "running": dep.Manager.Status(), "config": cfg})
 }
 
-func singleInboundTopology(id, kind string, port int, data map[string]interface{}) singbox.UIData {
+func singleInboundTopology(id, kind string, port int, remark string, data map[string]interface{}) singbox.UIData {
 	outID := "direct-oneclick"
+	label := remark
+	if label == "" {
+		label = strings.ToUpper(strings.TrimPrefix(kind, "inbound-")) + fmt.Sprintf(" :%d", port)
+	}
 	return singbox.UIData{
 		Nodes: []singbox.UINode{
-			{ID: id, Kind: kind, Label: strings.ToUpper(strings.TrimPrefix(kind, "inbound-")) + fmt.Sprintf(" :%d", port), Data: data},
+			{ID: id, Kind: kind, Label: label, Data: data},
 			{ID: outID, Kind: "outbound-direct", Label: "Direct", Data: map[string]interface{}{"kind": "outbound-direct", "tag": "direct"}},
 		},
 		Edges: []singbox.UIEdge{{ID: "e-" + id + "-direct", Source: id, Target: outID}},

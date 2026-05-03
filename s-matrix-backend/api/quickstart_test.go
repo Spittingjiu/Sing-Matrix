@@ -14,7 +14,7 @@ import (
 type testManager struct{}
 
 func TestSingleInboundTopologyReality(t *testing.T) {
-	topo := singleInboundTopology("reality-oneclick", "inbound-reality", 50123, map[string]interface{}{"tag": "reality-oneclick", "port": 50123, "uuid": "00000000-0000-0000-0000-000000000000", "private_key": "k", "short_id": "abcd", "dest": "www.microsoft.com"})
+	topo := singleInboundTopology("reality-oneclick", "inbound-reality", 50123, "REALITY :50123", map[string]interface{}{"tag": "reality-oneclick", "port": 50123, "uuid": "00000000-0000-0000-0000-000000000000", "private_key": "k", "short_id": "abcd", "dest": "www.microsoft.com"})
 	cfg, err := singbox.CompileToSingbox(topo)
 	if err != nil { t.Fatal(err) }
 	if len(cfg.Inbounds) != 1 || cfg.Inbounds[0].Type != "vless" { t.Fatalf("bad inbound: %+v", cfg.Inbounds) }
