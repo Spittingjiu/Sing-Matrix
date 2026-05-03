@@ -23,3 +23,9 @@ frontend/.vite/
 # IDE
 .idea/
 .vscode/
+
+# s-matrix first-stage generated dirs
+s-matrix-frontend/node_modules/
+s-matrix-frontend/dist/
+s-matrix-backend/*.db
+s-matrix-backend/config_test.json
