@@ -1,29 +1,85 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
-import type { Edge, Node } from '@vue-flow/core'
+
 import { parseTopology } from '../core/compiler/parser'
 import { apiFetch, clearToken, getToken } from '../api/http'
 import QrcodeVue from 'qrcode.vue'
 import Terminal from './Terminal.vue'
+import QuickStartWizard from './QuickStartWizard.vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
-const nodes = ref<Node[]>([
+const nodes = ref<any[]>([
   { id: 'reality-443', position: { x: 80, y: 120 }, label: 'VLESS REALITY', data: { kind: 'inbound-reality' } },
   { id: 'hy2-44300', position: { x: 80, y: 260 }, label: 'Hysteria2', data: { kind: 'inbound-hy2' } },
   { id: 'direct', position: { x: 520, y: 180 }, label: 'Direct Outbound', data: { kind: 'outbound-direct' } }
 ])
-const edges = ref<Edge[]>([])
+const edges = ref<any[]>([])
 const deploying = ref(false)
+const blueprintReady = ref(false)
+const animating = ref(false)
 const successText = ref('')
 const errorText = ref('')
 const shareDialog = ref(false)
 const shareLinks = ref<string[]>([])
 const subscriptionUrl = ref(`${location.origin}/api/v1/sub/default`)
 const copied = ref('')
-const { toObject } = useVueFlow()
+const { toObject, fitView } = useVueFlow()
 const deployButtonClass = computed(() => deploying.value ? 'animate-pulse shadow-[0_0_30px_rgba(16,185,129,.65)]' : '')
+
+
+function randomPassword(length = 28) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789_-@#%'
+  const bytes = crypto.getRandomValues(new Uint8Array(length))
+  return Array.from(bytes, b => chars[b % chars.length]).join('')
+}
+
+function randomHex(bytes = 8) {
+  const buf = crypto.getRandomValues(new Uint8Array(bytes))
+  return Array.from(buf, b => b.toString(16).padStart(2, '0')).join('')
+}
+
+function randomPort() {
+  return 50000 + Math.floor(Math.random() * 10001)
+}
+
+function blueprint(name: 'reality' | 'hy2' | 'matrix') {
+  const hy2Port = randomPort()
+  const reality = { id: 'bp-reality', position: { x: 80, y: 120 }, label: '隐匿堡垒 REALITY', data: { kind: 'inbound-reality', tag: 'reality-443', port: 443, dest: 'www.microsoft.com', short_id: randomHex(8), private_key: randomHex(32), uuid: crypto.randomUUID?.() || '00000000-0000-0000-0000-000000000000' } }
+  const hy2 = { id: 'bp-hy2', position: { x: 80, y: 300 }, label: '极限飙车 HY2', data: { kind: 'inbound-hy2', tag: 'hy2-boost', port: hy2Port, password: randomPassword(), up_mbps: 1000, down_mbps: 1000, masquerade: 'https://www.bing.com' } }
+  const rule = { id: 'bp-rule-global', position: { x: 420, y: 210 }, label: 'Global SRS Matrix', data: { kind: 'rule-srs', tag: 'global', url: 'https://example.com/global.srs' } }
+  const out = { id: 'bp-direct', position: { x: 760, y: 210 }, label: 'Direct Outbound', data: { kind: 'outbound-direct', tag: 'direct' } }
+  if (name === 'reality') return { nodes: [reality, rule, out], edges: [{ id: 'e-reality-rule', source: reality.id, target: rule.id }, { id: 'e-rule-out', source: rule.id, target: out.id }] }
+  if (name === 'hy2') return { nodes: [hy2, rule, out], edges: [{ id: 'e-hy2-rule', source: hy2.id, target: rule.id }, { id: 'e-rule-out', source: rule.id, target: out.id }] }
+  return { nodes: [reality, hy2, rule, out], edges: [{ id: 'e-reality-rule', source: reality.id, target: rule.id }, { id: 'e-hy2-rule', source: hy2.id, target: rule.id }, { id: 'e-rule-out', source: rule.id, target: out.id }] }
+}
+
+async function runBlueprint(name: 'reality' | 'hy2' | 'matrix') {
+  animating.value = true
+  blueprintReady.value = false
+  nodes.value = []
+  edges.value = []
+  const bp = blueprint(name)
+  for (const node of bp.nodes) {
+    await new Promise(resolve => setTimeout(resolve, 330))
+    nodes.value.push(node as any)
+    await nextTick()
+  }
+  for (const edge of bp.edges) {
+    await new Promise(resolve => setTimeout(resolve, 260))
+    edges.value.push({ ...edge, animated: true, style: { stroke: '#10b981', strokeWidth: 2.5 } } as any)
+    await nextTick()
+  }
+  await fitView({ duration: 700, padding: 0.2 })
+  animating.value = false
+  blueprintReady.value = true
+}
+
+async function initializeMatrix() {
+  await deployTopology()
+  if (!errorText.value) await loadShareLinks()
+}
 
 async function copyText(text: string, label = 'copied') {
   await navigator.clipboard.writeText(text)
@@ -63,6 +119,7 @@ async function deployTopology() {
 
 <template>
   <main class="min-h-screen bg-slate-950 p-6 text-slate-100">
+    <QuickStartWizard @blueprint="runBlueprint" />
     <section class="mb-5">
       <p class="text-xs uppercase tracking-[0.45em] text-cyan-300">S-Matrix</p>
       <h1 class="mt-2 text-3xl font-black">Vue Flow Traffic Studio</h1>
@@ -76,6 +133,7 @@ async function deployTopology() {
     <button class="mb-4 ml-3 rounded-2xl border border-cyan-400/40 bg-cyan-500/15 px-5 py-3 font-mono text-sm font-black uppercase tracking-[0.22em] text-cyan-100 transition hover:bg-cyan-400/20" @click="loadShareLinks">生成客户端链接</button>
     <button class="mb-4 ml-3 rounded-2xl border border-violet-400/40 bg-violet-500/15 px-5 py-3 font-mono text-sm font-black uppercase tracking-[0.22em] text-violet-100 transition hover:bg-violet-400/20" @click="copyText(subscriptionUrl, 'subscription copied')">我的订阅地址</button>
     <span v-if="copied" class="ml-3 font-mono text-xs text-emerald-300">{{ copied }}</span>
+    <button v-if="blueprintReady" :disabled="deploying || animating" class="mb-4 block w-full rounded-[24px] border border-emerald-300/60 bg-emerald-400/20 px-6 py-5 font-mono text-lg font-black uppercase tracking-[0.25em] text-emerald-50 shadow-[0_0_42px_rgba(16,185,129,.35)] transition hover:bg-emerald-300/25 disabled:cursor-wait" @click="initializeMatrix">[ INITIALIZE MATRIX (一键启动矩阵) ]</button>
     <button :disabled="deploying" :class="deployButtonClass" class="mb-4 rounded-2xl border border-emerald-400/40 bg-emerald-500/15 px-5 py-3 font-mono text-sm font-black uppercase tracking-[0.22em] text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-wait" @click="deployTopology">
       {{ deploying ? 'DEPLOYING MATRIX...' : '一键激活 / DEPLOY MATRIX' }}
     </button>
