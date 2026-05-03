@@ -1,0 +1,20 @@
+[Unit]
+Description=Sing-Matrix Panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sing-matrix/backend
+Environment=SMATRIX_ADDR=127.0.0.1:18088
+Environment=SMATRIX_DB=/opt/sing-matrix/data/smatrix.db
+Environment=SMATRIX_SINGBOX_BIN=/usr/local/bin/sing-box
+Environment=SMATRIX_SINGBOX_CONFIG=/etc/sing-box/config.json
+Environment=SMATRIX_GENERATED_CONFIG=/opt/sing-matrix/data/generated/config.json
+ExecStart=/opt/sing-matrix/backend/smatrix
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

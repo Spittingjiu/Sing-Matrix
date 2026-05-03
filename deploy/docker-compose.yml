@@ -1,0 +1,14 @@
+services:
+  smatrix-backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "127.0.0.1:18088:18088"
+    volumes:
+      - ./data:/app/data
+    environment:
+      SMATRIX_ADDR: 0.0.0.0:18088
+      SMATRIX_DB: /app/data/smatrix.db
+      SMATRIX_SINGBOX_CONFIG: /app/data/sing-box/config.json
+      SMATRIX_GENERATED_CONFIG: /app/data/generated/config.json
