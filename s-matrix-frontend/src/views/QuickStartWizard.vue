@@ -3,27 +3,30 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 const emit = defineEmits<{ blueprint: [name: 'reality' | 'hy2' | 'matrix'] }>()
 const blueprints = [
-  { id: 'reality', nameKey: 'realityBlueprint', desc: 'REALITY Only · 443 · Microsoft camouflage', color: 'emerald' },
-  { id: 'hy2', nameKey: 'hy2Blueprint', desc: 'Hysteria2 Only · random high port · max bandwidth', color: 'cyan' },
-  { id: 'matrix', nameKey: 'matrixBlueprint', desc: 'REALITY + HY2 All-in-One · auto routed', color: 'violet' }
+  { id: 'reality', nameKey: 'realityBlueprint', desc: 'REALITY · 自动端口 · Microsoft 伪装', badge: '隐匿' },
+  { id: 'hy2', nameKey: 'hy2Blueprint', desc: 'Hysteria2 · 高位随机端口 · 满速参数', badge: '极速' },
+  { id: 'matrix', nameKey: 'matrixBlueprint', desc: 'REALITY + HY2 · 自动分流 · 订阅直出', badge: '推荐' }
 ] as const
 </script>
 
 <template>
-  <section class="mb-5 rounded-[32px] border border-emerald-500/25 bg-slate-900/45 p-5 shadow-[0_0_70px_rgba(16,185,129,.10)] backdrop-blur-xl">
-    <div class="mb-4 flex items-end justify-between gap-4">
+  <section class="suigo-card p-5">
+    <div class="mb-4 flex items-center justify-between">
       <div>
-        <p class="font-mono text-xs uppercase tracking-[0.42em] text-emerald-300">{{ t('blueprintWizard') }}</p>
-        <h2 class="mt-2 text-2xl font-black text-white">{{ t('quickStart') }} · {{ t('initializeMatrix') }}</h2>
+        <p class="text-xs font-black uppercase tracking-[0.28em] text-emerald-600">{{ t('blueprintWizard') }}</p>
+        <h2 class="mt-1 text-xl font-black text-slate-950">{{ t('quickStart') }}</h2>
       </div>
-      <div class="hidden font-mono text-xs text-slate-500 md:block">AUTO GRAPH ORCHESTRATION</div>
+      <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-500">Matrix</span>
     </div>
-    <div class="grid gap-4 md:grid-cols-3">
-      <button v-for="bp in blueprints" :key="bp.id" class="group rounded-3xl border border-emerald-500/20 bg-slate-950/55 p-5 text-left shadow-[0_0_20px_#10b98122] backdrop-blur-xl transition duration-300 hover:-translate-y-1 hover:scale-105 hover:border-emerald-400/60 hover:shadow-[0_0_20px_#10b98155]" @click="emit('blueprint', bp.id)">
-        <div class="mb-4 h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_18px_rgba(52,211,153,1)]" />
-        <div class="text-xl font-black text-white">{{ t(bp.nameKey) }}</div>
-        <div class="mt-2 text-sm text-slate-400">{{ bp.desc }}</div>
-        <div class="mt-5 font-mono text-xs uppercase tracking-[0.2em] text-emerald-300 opacity-70 group-hover:opacity-100">Inject Blueprint →</div>
+    <div class="space-y-3">
+      <button v-for="bp in blueprints" :key="bp.id" class="group w-full rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:scale-[1.02] hover:border-emerald-300 hover:shadow-[0_0_20px_#10b98133]" @click="emit('blueprint', bp.id)">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="text-base font-black text-slate-950">{{ t(bp.nameKey) }}</div>
+            <div class="mt-1 text-sm text-slate-500">{{ bp.desc }}</div>
+          </div>
+          <span class="rounded-full bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700">{{ bp.badge }}</span>
+        </div>
       </button>
     </div>
   </section>
