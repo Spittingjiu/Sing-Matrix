@@ -34,3 +34,6 @@ body { margin: 0; }
 
 .suigo-input { border: 1px solid #e2e8f0; border-radius: 14px; background: white; padding: 10px 14px; font-size: 14px; outline: none; transition: all .2s ease; }
 .suigo-input:focus { border-color: #10b981; box-shadow: 0 0 0 3px rgba(16,185,129,.12); }
+.suigo-oneclick { border-width: 1px; border-style: solid; border-radius: 26px; padding: 22px; box-shadow: 0 18px 45px rgba(15,23,42,.08); transition: all .22s ease; }
+.suigo-oneclick:hover { transform: translateY(-2px); box-shadow: 0 24px 70px rgba(15,23,42,.13); }
+.suigo-oneclick:disabled { opacity: .55; cursor: wait; transform: none; }

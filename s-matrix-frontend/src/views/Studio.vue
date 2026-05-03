@@ -111,6 +111,23 @@ async function loadShareLinks() {
   const data = JSON.parse(text); shareLinks.value = data.links || []; subscriptionUrl.value = data.subscription || `${location.origin}/api/v1/sub/default`; shareDialog.value = true
 }
 async function initializeMatrix() { flashActive.value = true; window.setTimeout(() => flashActive.value = false, 420); await deployTopology(); if (!errorText.value) await loadShareLinks() }
+
+async function oneClick(kind: 'reality' | 'hy2') {
+  deploying.value = true; successText.value = ''; errorText.value = ''
+  try {
+    const res = await apiFetch(`/api/v1/quick/${kind}`, { method: 'POST' })
+    const text = await res.text()
+    if (!res.ok) throw new Error(text)
+    const data = JSON.parse(text)
+    nodes.value = (data.nodes || []).map((n: any) => ({ id: n.id, kind: n.kind || n.data?.kind, label: n.label, tag: n.data?.tag || n.id, port: n.data?.port }))
+    shareLinks.value = data.links || []
+    subscriptionUrl.value = data.subscription || `${location.origin}/api/v1/sub/default`
+    successText.value = kind === 'reality' ? `REALITY 已部署，端口 ${data.port}` : `HY2 已部署，端口 ${data.port}`
+    shareDialog.value = true
+    window.setTimeout(() => successText.value = '', 5200)
+  } catch (err) { errorText.value = String(err) } finally { deploying.value = false }
+}
+
 </script>
 
 <template>
@@ -131,6 +148,19 @@ async function initializeMatrix() { flashActive.value = true; window.setTimeout(
       <div v-show="activeTab === 'nodes'" class="space-y-5">
         <div v-if="successText" class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">{{ successText }}</div>
         <div v-if="errorText" class="rounded-2xl border border-red-200 bg-red-50 p-4"><div class="mb-2 text-sm font-bold text-red-700">SING-BOX EXCEPTION</div><pre class="max-h-40 overflow-auto whitespace-pre-wrap text-xs text-red-700">{{ errorText }}</pre></div>
+
+        <section class="grid gap-4 md:grid-cols-2">
+          <button :disabled="deploying" class="suigo-oneclick border-emerald-200 bg-emerald-50 text-left hover:border-emerald-400" @click="oneClick('reality')">
+            <div class="text-xs font-black uppercase tracking-[0.28em] text-emerald-600">ONE CLICK</div>
+            <div class="mt-2 text-2xl font-black text-slate-950">一键 REALITY</div>
+            <div class="mt-1 text-sm text-slate-500">自动端口、UUID、REALITY Key、短 ID，部署后直接给客户端链接。</div>
+          </button>
+          <button :disabled="deploying" class="suigo-oneclick border-cyan-200 bg-cyan-50 text-left hover:border-cyan-400" @click="oneClick('hy2')">
+            <div class="text-xs font-black uppercase tracking-[0.28em] text-cyan-600">ONE CLICK</div>
+            <div class="mt-2 text-2xl font-black text-slate-950">一键 HY2</div>
+            <div class="mt-1 text-sm text-slate-500">自动端口、随机密码、伪装地址，部署后直接给订阅和二维码。</div>
+          </button>
+        </section>
 
         <div class="flex flex-wrap items-center gap-3">
           <button class="suigo-primary" @click="initializeMatrix">{{ t('initializeMatrix') }}</button>

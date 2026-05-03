@@ -67,7 +67,7 @@ type RouteRule struct {
 	Outbound string `json:"outbound"`
 }
 
-func NewRealityInbound(tag string, port int, uuid string, privateKey string, shortID string, serverName string) Inbound {
+func NewRealityInbound(tag string, port int, uuid string, privateKey string, publicKey string, shortID string, serverName string) Inbound {
 	return Inbound{
 		Type:       "vless",
 		Tag:        tag,
@@ -84,6 +84,7 @@ func NewRealityInbound(tag string, port int, uuid string, privateKey string, sho
 					"server_port": 443,
 				},
 				"private_key": privateKey,
+				"public_key":  publicKey,
 				"short_id":    []string{shortID},
 			},
 		},
@@ -106,7 +107,7 @@ func BuildTestConfig() Config {
 		Log: &Log{Level: "info", Timestamp: true},
 		DNS: &DNS{Servers: []DNSServer{{Tag: "cloudflare", Address: "https://1.1.1.1/dns-query"}, {Tag: "alidns", Address: "https://dns.alidns.com/dns-query"}}},
 		Inbounds: []Inbound{
-			NewRealityInbound("reality-443", 443, "00000000-0000-0000-0000-000000000000", "CHANGE_ME_PRIVATE_KEY", "0123456789abcdef", "www.cloudflare.com"),
+			NewRealityInbound("reality-443", 443, "00000000-0000-0000-0000-000000000000", "CHANGE_ME_PRIVATE_KEY", "CHANGE_ME_PUBLIC_KEY", "0123456789abcdef", "www.cloudflare.com"),
 			NewHysteria2Inbound("hy2-44300", 44300, "change-me-password", "https://www.bing.com"),
 		},
 		Outbounds: []Outbound{{Type: "direct", Tag: "direct"}, {Type: "block", Tag: "block"}},
