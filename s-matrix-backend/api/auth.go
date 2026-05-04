@@ -22,7 +22,8 @@ func LoginHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.Username != "admin" || req.Password != "admin" {
+	creds := loadCreds()
+	if req.Username != creds.Username || req.Password != creds.Password {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}

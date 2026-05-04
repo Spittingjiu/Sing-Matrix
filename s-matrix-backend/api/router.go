@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"os/exec"
+	"regexp"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -112,15 +114,24 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 		if len(cpuVals) > 0 {
 			cpuPercent = cpuVals[0]
 		}
+		sv := "unknown"
+		if out, err := exec.Command("sing-box", "version").CombinedOutput(); err == nil {
+			if m := regexp.MustCompile(`version\s+(\S+)`).FindStringSubmatch(string(out)); len(m) > 1 {
+				sv = m[1]
+			}
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"cpu_percent":       cpuPercent,
 			"memory_used":       vm.Used,
 			"memory_total":      vm.Total,
 			"memory_percent":    vm.UsedPercent,
 			"sing_box_running":  dep.Manager.Status(),
+			"singbox_version":   sv,
 			"generated_at_unix": time.Now().Unix(),
 		})
 	})
+	secured.POST("/system/change-password", ChangePasswordHandler)
+	secured.GET("/system/gen-reality-keypair", GenRealityKeypairHandler)
 	MountStatic(r, staticFS)
 	return r
 }
