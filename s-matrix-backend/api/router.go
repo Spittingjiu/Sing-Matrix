@@ -43,6 +43,7 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	if dep.DB != nil {
 		secured.GET("/inbounds", ListInboundsHandler(dep.DB))
 		secured.POST("/inbounds/:id/toggle", ToggleInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
+		secured.PUT("/inbounds/:id/rename", RenameInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
 		secured.DELETE("/inbounds/:id", DeleteInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
 		secured.GET("/inbounds/:id/links", InboundLinksHandler(dep.DB))
 	}
@@ -61,8 +62,23 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "config": cfg})
 			return
 		}
-		// Persist inbounds to DB
+		// Persist inbounds to DB. Compile is a full desired-state operation: remove stale
+		// DB rows that are no longer present in the generated config (for example, rename
+		// from external managers such as sui-sub/SBUI panel management).
 		if dep.DB != nil {
+			currentTags := map[string]bool{}
+			for _, ib := range cfg.Inbounds {
+				currentTags[ib.Tag] = true
+			}
+			var existing []models.Inbound
+			if err := dep.DB.Find(&existing).Error; err == nil {
+				for _, old := range existing {
+					if !currentTags[old.Tag] {
+						dep.DB.Delete(&old)
+						dep.DB.Where("tag = ?", old.Tag).Delete(&models.Outbound{})
+					}
+				}
+			}
 			for _, ib := range cfg.Inbounds {
 				dep.DB.Where("tag = ?", ib.Tag).Delete(&models.Inbound{})
 				payload := map[string]interface{}{}

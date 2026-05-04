@@ -52,6 +52,51 @@ func ToggleInboundHandler(db *gorm.DB, manager *singbox.SingboxManager, configPa
 	}
 }
 
+func RenameInboundHandler(db *gorm.DB, manager *singbox.SingboxManager, configPath string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid id"})
+			return
+		}
+		var req struct {
+			Remark string `json:"remark"`
+			Tag    string `json:"tag"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		newTag := req.Remark
+		if newTag == "" {
+			newTag = req.Tag
+		}
+		if newTag == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "remark required"})
+			return
+		}
+		var inbound models.Inbound
+		if err := db.First(&inbound, id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "inbound not found"})
+			return
+		}
+		oldTag := inbound.Tag
+		inbound.Tag = newTag
+		if err := db.Save(&inbound).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		if oldTag != newTag {
+			db.Model(&models.Outbound{}).Where("tag = ?", oldTag).Update("tag", newTag)
+		}
+		if err := rebuildFromDB(db, manager, configPath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "renamed, rebuild failed: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "obj": inbound})
+	}
+}
+
 func DeleteInboundHandler(db *gorm.DB, manager *singbox.SingboxManager, configPath string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
