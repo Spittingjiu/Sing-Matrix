@@ -73,7 +73,7 @@ func QuickHY2Handler(dep quickDeps) gin.HandlerFunc {
 		topo := singleInboundTopology("hy2-oneclick", "inbound-hy2", port, remark, map[string]interface{}{
 			"tag":        remark,
 			"port":       port,
-			"password":   randomToken(28),
+			"password":   randomHex(28),
 			"masquerade": "https://www.bing.com",
 		})
 		respondQuick(c, dep, topo, "hy2", port)
@@ -173,7 +173,7 @@ func writeClientMeta(configPath string, topo singbox.UIData) error {
 }
 
 func generateRealityMaterial(bin string) map[string]string {
-	result := map[string]string{"short_id": randomHex(8), "private_key": randomToken(43), "public_key": ""}
+	result := map[string]string{"short_id": randomHex(8), "private_key": randomHex(43), "public_key": ""}
 	if out, err := exec.Command(bin, "generate", "reality-keypair").CombinedOutput(); err == nil {
 		text := string(out)
 		rePriv := regexp.MustCompile(`(?m)^PrivateKey:\s*(\S+)`)
@@ -193,64 +193,9 @@ func randomHex(bytes int) string {
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
-func randomToken(bytes int) string { return randomHex(bytes) }
 func randomUUIDLike() string {
 	h := randomHex(16)
 	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 }
 
-func RenameInboundHandler(dep quickDeps) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req struct {
-			Tag    string `json:"tag"`
-			NewTag string `json:"new_tag"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil || req.Tag == "" || req.NewTag == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "tag and new_tag required"})
-			return
-		}
-		// Read current config
-		data, err := os.ReadFile(dep.ConfigPath)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read config"})
-			return
-		}
-		var cfg map[string]interface{}
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse config"})
-			return
-		}
-		inbounds, ok := cfg["inbounds"].([]interface{})
-		if !ok {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "no inbounds in config"})
-			return
-		}
-		found := false
-		for _, in := range inbounds {
-			if m, ok := in.(map[string]interface{}); ok && m["tag"] == req.Tag {
-				m["tag"] = req.NewTag
-				found = true
-				break
-			}
-		}
-		if !found {
-			c.JSON(http.StatusNotFound, gin.H{"error": "inbound not found"})
-			return
-		}
-		newData, err := json.MarshalIndent(cfg, "", "  ")
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to marshal config"})
-			return
-		}
-		if err := os.WriteFile(dep.ConfigPath, newData, 0644); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write config"})
-			return
-		}
-		if err := dep.Manager.Restart(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "config updated but restart failed: " + err.Error()})
-			return
-		}
-		links, _ := BuildShareLinks(dep.ConfigPath, publicHost(c))
-		c.JSON(http.StatusOK, gin.H{"ok": true, "new_tag": req.NewTag, "links": links})
-	}
-}
+

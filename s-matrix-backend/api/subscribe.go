@@ -209,51 +209,6 @@ func buildSSLink(in map[string]interface{}, host string, port int, tag string) s
 	return fmt.Sprintf("ss://%s#%s", b64, url.QueryEscape(tag))
 }
 
-func BuildSingleInboundLink(configPath, host string, id uint) (string, error) {
-	// Load DB to find tag, then config to find the inbound
-	// For simplicity, rebuild from config
-	links, err := BuildShareLinks(configPath, host)
-	if err != nil {
-		return "", err
-	}
-	// Get tag from DB
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return "", fmt.Errorf("cannot read config: %w", err)
-	}
-	var cfg runtimeConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return "", err
-	}
-	for _, in := range cfg.Inbounds {
-		typ := strMap(in, "type", "")
-		tag := strMap(in, "tag", "")
-		port := intMap(in, "listen_port", 0)
-		var link string
-		switch typ {
-		case "vless":
-			link = buildVLESSLink(in, host, port, tag, configPath)
-		case "hysteria2":
-			link = buildHY2Link(in, host, port, tag)
-		case "vmess":
-			link = buildVMessLink(in, host, port, tag)
-		case "trojan":
-			link = buildTrojanLink(in, host, port, tag)
-		case "shadowsocks":
-			link = buildSSLink(in, host, port, tag)
-		case "socks":
-			link = fmt.Sprintf("socks5://%s:%d#%s", host, port, url.QueryEscape(tag))
-		case "http":
-			link = fmt.Sprintf("http://%s:%d#%s", host, port, url.QueryEscape(tag))
-		}
-		if link != "" {
-			return link, nil
-		}
-		_ = links
-	}
-	return "", fmt.Errorf("no inbound found in config")
-}
-
 func publicHost(c *gin.Context) string {
 	if h := c.Query("host"); h != "" {
 		return h

@@ -39,10 +39,8 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 	secured.GET("/singbox/test-config", func(c *gin.Context) { c.JSON(http.StatusOK, singbox.BuildTestConfig()) })
 	secured.GET("/singbox/share-links", ShareLinksHandler(dep.ConfigPath))
 	secured.GET("/logs/ws", LogsWSHandler(dep.LogPath))
-	secured.GET("/ports/available", AvailablePortHandler)
 	secured.POST("/quick/reality", QuickRealityHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB}))
 	secured.POST("/quick/hy2", QuickHY2Handler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB}))
-	secured.PUT("/inbounds/rename", RenameInboundHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath}))
 	if dep.DB != nil {
 		secured.GET("/inbounds", ListInboundsHandler(dep.DB))
 		secured.POST("/inbounds/:id/toggle", ToggleInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
