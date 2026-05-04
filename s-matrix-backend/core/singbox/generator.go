@@ -1,10 +1,10 @@
 package singbox
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"os"
-	"strings"
 )
 
 type Config struct {
@@ -125,40 +125,27 @@ func NewVMessInbound(tag string, port int, uuid string, network string, path str
 		}
 		in.Transport = t
 	}
-	if tls {
-		in.TLS = map[string]interface{}{"enabled": true}
-		if serverName != "" {
-			in.TLS["server_name"] = serverName
-		}
-	}
+	// Do not emit inbound TLS here unless certificate/key fields are supported.
+	// sing-box rejects bare TLS inbounds with "missing certificate". TLS-capable
+	// protocols should either use REALITY or explicit certificate paths.
+	_ = tls
+	_ = serverName
 	return in
 }
 
 func NewTrojanInbound(tag string, port int, password string, serverName string) Inbound {
-	in := Inbound{
+	_ = serverName
+	return Inbound{
 		Type:       "trojan",
 		Tag:        tag,
 		Listen:     "::",
 		ListenPort: port,
 		Users:      []User{{Password: password}},
-		TLS:        map[string]interface{}{"enabled": true},
 	}
-	if serverName != "" {
-		in.TLS["server_name"] = serverName
-	}
-	return in
 }
 
 func NewShadowsocksInbound(tag string, port int, method string, password string) Inbound {
-	pwd := password
-	// 2022-blake3 methods require base64-encoded PSK (16 or 32 bytes)
-	if strings.HasPrefix(method, "2022-blake3") {
-		decoded, err := base64.StdEncoding.DecodeString(password)
-		if err != nil || (len(decoded) != 16 && len(decoded) != 32) {
-			// Not a valid PSK — encode the raw password
-			pwd = base64.StdEncoding.EncodeToString([]byte(password))
-		}
-	}
+	pwd := normalizeShadowsocksPassword(method, password)
 	return Inbound{
 		Type:       "shadowsocks",
 		Tag:        tag,
@@ -167,6 +154,27 @@ func NewShadowsocksInbound(tag string, port int, method string, password string)
 		Method:     method,
 		Password:   pwd,
 	}
+}
+
+func normalizeShadowsocksPassword(method string, password string) string {
+	// sing-box 2022-blake3 methods require a base64-encoded PSK with an exact
+	// decoded length. If the operator enters a human password, derive a stable
+	// valid PSK instead of writing a config that sing-box rejects with "bad key".
+	keyLen := 0
+	switch method {
+	case "2022-blake3-aes-128-gcm":
+		keyLen = 16
+	case "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305":
+		keyLen = 32
+	}
+	if keyLen == 0 {
+		return password
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(password); err == nil && len(decoded) == keyLen {
+		return password
+	}
+	sum := sha256.Sum256([]byte(password))
+	return base64.StdEncoding.EncodeToString(sum[:keyLen])
 }
 
 func NewSocksInbound(tag string, port int) Inbound {
