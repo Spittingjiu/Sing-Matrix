@@ -36,6 +36,7 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 	secured.GET("/ports/available", AvailablePortHandler)
 	secured.POST("/quick/reality", QuickRealityHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath}))
 	secured.POST("/quick/hy2", QuickHY2Handler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath}))
+	secured.PUT("/inbounds/rename", RenameInboundHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath}))
 	secured.POST("/singbox/compile", func(c *gin.Context) {
 		var ui singbox.UIData
 		if err := c.ShouldBindJSON(&ui); err != nil {

@@ -167,3 +167,59 @@ func randomUUIDLike() string {
 	h := randomHex(16)
 	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 }
+
+func RenameInboundHandler(dep quickDeps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Tag    string `json:"tag"`
+			NewTag string `json:"new_tag"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil || req.Tag == "" || req.NewTag == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "tag and new_tag required"})
+			return
+		}
+		// Read current config
+		data, err := os.ReadFile(dep.ConfigPath)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read config"})
+			return
+		}
+		var cfg map[string]interface{}
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse config"})
+			return
+		}
+		inbounds, ok := cfg["inbounds"].([]interface{})
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no inbounds in config"})
+			return
+		}
+		found := false
+		for _, in := range inbounds {
+			if m, ok := in.(map[string]interface{}); ok && m["tag"] == req.Tag {
+				m["tag"] = req.NewTag
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.JSON(http.StatusNotFound, gin.H{"error": "inbound not found"})
+			return
+		}
+		newData, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to marshal config"})
+			return
+		}
+		if err := os.WriteFile(dep.ConfigPath, newData, 0644); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write config"})
+			return
+		}
+		if err := dep.Manager.Restart(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "config updated but restart failed: " + err.Error()})
+			return
+		}
+		links, _ := BuildShareLinks(dep.ConfigPath, publicHost(c))
+		c.JSON(http.StatusOK, gin.H{"ok": true, "new_tag": req.NewTag, "links": links})
+	}
+}
