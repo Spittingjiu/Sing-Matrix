@@ -65,7 +65,8 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			}
 			in := NewVMessInbound(tagOf(node), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"),
 				str(node.Data, "network", "tcp"), str(node.Data, "path", "/"), str(node.Data, "host", ""),
-				str(node.Data, "security", "") == "tls", str(node.Data, "sni", str(node.Data, "server_name", "")))
+				str(node.Data, "security", "") == "tls", str(node.Data, "sni", str(node.Data, "server_name", "")),
+				str(node.Data, "vmess_security", "auto"))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-trojan":

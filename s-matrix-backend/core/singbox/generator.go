@@ -39,6 +39,7 @@ type Inbound struct {
 	Method     string                 `json:"method,omitempty"`
 	Password   string                 `json:"password,omitempty"`
 	Network    string                 `json:"network,omitempty"`
+	Security   string                 `json:"security,omitempty"`
 }
 
 type User struct {
@@ -105,13 +106,16 @@ func NewHysteria2Inbound(tag string, port int, password string, masquerade strin
 	}
 }
 
-func NewVMessInbound(tag string, port int, uuid string, network string, path string, host string, tls bool, serverName string) Inbound {
+func NewVMessInbound(tag string, port int, uuid string, network string, path string, host string, tls bool, serverName string, vmessSecurity string) Inbound {
 	in := Inbound{
 		Type:       "vmess",
 		Tag:        tag,
 		Listen:     "::",
 		ListenPort: port,
 		Users:      []User{{UUID: uuid}},
+	}
+	if vmessSecurity != "" && vmessSecurity != "auto" {
+		in.Security = vmessSecurity
 	}
 	if network != "" && network != "tcp" {
 		t := map[string]interface{}{"type": network}
