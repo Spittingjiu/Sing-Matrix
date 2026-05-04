@@ -70,6 +70,12 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 					if sn, ok := ib.TLS["server_name"].(string); ok {
 						payload["server_name"] = sn
 					}
+					if cert, ok := ib.TLS["certificate_path"].(string); ok {
+						payload["certificate_path"] = cert
+					}
+					if key, ok := ib.TLS["key_path"].(string); ok {
+						payload["key_path"] = key
+					}
 					if r, ok := ib.TLS["reality"].(map[string]interface{}); ok {
 						if pk, ok := r["private_key"].(string); ok {
 							payload["private_key"] = pk
@@ -98,11 +104,21 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 					}
 				}
 				for _, u := range ib.Users {
+					if u.Name != "" {
+						payload["name"] = u.Name
+					}
+					if u.Username != "" {
+						payload["username"] = u.Username
+					}
 					if u.UUID != "" {
 						payload["uuid"] = u.UUID
 					}
 					if u.Password != "" {
 						payload["password"] = u.Password
+					}
+					if u.AuthStr != "" {
+						payload["auth_str"] = u.AuthStr
+						payload["password"] = u.AuthStr
 					}
 				}
 				if ib.Method != "" {
@@ -110,6 +126,39 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 				}
 				if ib.Password != "" && payload["password"] == nil {
 					payload["password"] = ib.Password
+				}
+				if ib.Masquerade != "" {
+					payload["masquerade"] = ib.Masquerade
+				}
+				if ib.UpMbps != 0 {
+					payload["up_mbps"] = ib.UpMbps
+				}
+				if ib.DownMbps != 0 {
+					payload["down_mbps"] = ib.DownMbps
+				}
+				if ib.Obfs != "" {
+					payload["obfs"] = ib.Obfs
+				}
+				if ib.Network != "" {
+					payload["network"] = ib.Network
+				}
+				if ib.CongestionControl != "" {
+					payload["congestion_control"] = ib.CongestionControl
+					payload["quic_congestion_control"] = ib.CongestionControl
+				}
+				if ib.WildcardSNI != "" {
+					payload["wildcard_sni"] = ib.WildcardSNI
+				}
+				if ib.Version != 0 {
+					payload["version"] = ib.Version
+				}
+				if ib.Handshake != nil {
+					if server, ok := ib.Handshake["server"].(string); ok {
+						payload["server_name"] = server
+					}
+				}
+				if len(ib.PaddingScheme) > 0 {
+					payload["padding_scheme"] = ib.PaddingScheme
 				}
 				payloadBytes, _ := json.Marshal(payload)
 				dep.DB.Create(&models.Inbound{

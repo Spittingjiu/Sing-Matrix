@@ -66,6 +66,16 @@ func DiscoveryHandler(configPath string) gin.HandlerFunc {
 				proto = "socks"
 			} else if strings.HasPrefix(link, "http://") {
 				proto = "http"
+			} else if strings.HasPrefix(link, "tuic://") {
+				proto = "tuic"
+			} else if strings.HasPrefix(link, "naive+https://") {
+				proto = "naive"
+			} else if strings.HasPrefix(link, "shadowtls://") {
+				proto = "shadowtls"
+			} else if strings.HasPrefix(link, "hysteria://") {
+				proto = "hysteria"
+			} else if strings.HasPrefix(link, "anytls://") {
+				proto = "anytls"
 			}
 			if proto != "" && !seen[proto] {
 				types = append(types, proto)
@@ -102,23 +112,53 @@ func BuildShareLinks(configPath, host string) ([]string, error) {
 		switch typ {
 		case "vless":
 			link := buildVLESSLink(in, host, port, tag, configPath)
-			if link != "" { links = append(links, link) }
+			if link != "" {
+				links = append(links, link)
+			}
 		case "hysteria2":
 			link := buildHY2Link(in, host, port, tag)
-			if link != "" { links = append(links, link) }
+			if link != "" {
+				links = append(links, link)
+			}
 		case "vmess":
 			link := buildVMessLink(in, host, port, tag)
-			if link != "" { links = append(links, link) }
+			if link != "" {
+				links = append(links, link)
+			}
 		case "trojan":
 			link := buildTrojanLink(in, host, port, tag)
-			if link != "" { links = append(links, link) }
+			if link != "" {
+				links = append(links, link)
+			}
 		case "shadowsocks":
 			link := buildSSLink(in, host, port, tag)
-			if link != "" { links = append(links, link) }
+			if link != "" {
+				links = append(links, link)
+			}
 		case "socks":
 			links = append(links, fmt.Sprintf("socks5://%s:%d#%s", host, port, url.QueryEscape(tag)))
 		case "http":
 			links = append(links, fmt.Sprintf("http://%s:%d#%s", host, port, url.QueryEscape(tag)))
+		case "tuic":
+			if link := buildTUICLink(in, host, port, tag); link != "" {
+				links = append(links, link)
+			}
+		case "naive":
+			if link := buildNaiveLink(in, host, port, tag); link != "" {
+				links = append(links, link)
+			}
+		case "shadowtls":
+			if link := buildShadowTLSLink(in, host, port, tag); link != "" {
+				links = append(links, link)
+			}
+		case "hysteria":
+			if link := buildHysteriaLink(in, host, port, tag); link != "" {
+				links = append(links, link)
+			}
+		case "anytls":
+			if link := buildAnyTLSLink(in, host, port, tag); link != "" {
+				links = append(links, link)
+			}
 		}
 	}
 	return links, nil
@@ -143,7 +183,9 @@ func buildVLESSLink(in map[string]interface{}, host string, port int, tag, confi
 	q.Set("encryption", "none")
 	q.Set("pbk", pbk)
 	q.Set("sni", sni)
-	if sid != "" { q.Set("sid", sid) }
+	if sid != "" {
+		q.Set("sid", sid)
+	}
 	q.Set("spx", "/")
 	q.Set("fp", "chrome")
 	q.Set("type", "tcp")
@@ -181,12 +223,18 @@ func buildVMessLink(in map[string]interface{}, host string, port int, tag string
 		"net": netType, "type": "none", "tls": "none",
 	}
 	if netType == "ws" {
-		if path != "" { vmessCfg["path"] = path }
-		if rHost != "" { vmessCfg["host"] = rHost }
+		if path != "" {
+			vmessCfg["path"] = path
+		}
+		if rHost != "" {
+			vmessCfg["host"] = rHost
+		}
 	}
 	if tlsEnabled {
 		vmessCfg["tls"] = "tls"
-		if sni != "" { vmessCfg["sni"] = sni }
+		if sni != "" {
+			vmessCfg["sni"] = sni
+		}
 	}
 	b, _ := json.Marshal(vmessCfg)
 	return fmt.Sprintf("vmess://%s", base64.StdEncoding.EncodeToString(b))
@@ -207,6 +255,49 @@ func buildSSLink(in map[string]interface{}, host string, port int, tag string) s
 	raw := fmt.Sprintf("%s:%s@%s:%d", method, password, host, port)
 	b64 := base64.StdEncoding.EncodeToString([]byte(raw))
 	return fmt.Sprintf("ss://%s#%s", b64, url.QueryEscape(tag))
+}
+
+func buildTUICLink(in map[string]interface{}, host string, port int, tag string) string {
+	uuid := firstUserValue(in, "uuid", "00000000-0000-0000-0000-000000000000")
+	password := firstUserValue(in, "password", "change-me")
+	q := url.Values{}
+	q.Set("congestion_control", strMap(in, "congestion_control", "cubic"))
+	q.Set("sni", host)
+	q.Set("insecure", "1")
+	return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuid, url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag))
+}
+
+func buildNaiveLink(in map[string]interface{}, host string, port int, tag string) string {
+	username := firstUserValue(in, "username", "user")
+	password := firstUserValue(in, "password", "change-me")
+	return fmt.Sprintf("naive+https://%s:%s@%s:%d#%s", url.QueryEscape(username), url.QueryEscape(password), host, port, url.QueryEscape(tag))
+}
+
+func buildShadowTLSLink(in map[string]interface{}, host string, port int, tag string) string {
+	password := firstUserValue(in, "password", strMap(in, "password", "change-me"))
+	handshake, _ := in["handshake"].(map[string]interface{})
+	sni := strMap(handshake, "server", "www.microsoft.com")
+	q := url.Values{}
+	q.Set("version", fmt.Sprintf("%d", intMap(in, "version", 3)))
+	q.Set("sni", sni)
+	return fmt.Sprintf("shadowtls://%s@%s:%d?%s#%s", url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag))
+}
+
+func buildHysteriaLink(in map[string]interface{}, host string, port int, tag string) string {
+	password := firstUserValue(in, "auth_str", firstUserValue(in, "password", "change-me"))
+	q := url.Values{}
+	q.Set("insecure", "1")
+	if obfs := strMap(in, "obfs", ""); obfs != "" {
+		q.Set("obfs", obfs)
+	}
+	return fmt.Sprintf("hysteria://%s@%s:%d?%s#%s", url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag))
+}
+
+func buildAnyTLSLink(in map[string]interface{}, host string, port int, tag string) string {
+	password := firstUserValue(in, "password", "change-me")
+	q := url.Values{}
+	q.Set("insecure", "1")
+	return fmt.Sprintf("anytls://%s@%s:%d?%s#%s", url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag))
 }
 
 func publicHost(c *gin.Context) string {
@@ -409,6 +500,43 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 
 	case "http":
 		return fmt.Sprintf("http://%s:%d#%s", host, port, url.QueryEscape(tag))
+
+	case "tuic":
+		uuid := strMap(payload, "uuid", "00000000-0000-0000-0000-000000000000")
+		pwd := strMap(payload, "password", "change-me")
+		q := url.Values{}
+		q.Set("congestion_control", strMap(payload, "congestion_control", "cubic"))
+		q.Set("sni", host)
+		q.Set("insecure", "1")
+		return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuid, url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
+
+	case "naive":
+		user := strMap(payload, "username", "user")
+		pwd := strMap(payload, "password", "change-me")
+		return fmt.Sprintf("naive+https://%s:%s@%s:%d#%s", url.QueryEscape(user), url.QueryEscape(pwd), host, port, url.QueryEscape(tag))
+
+	case "shadowtls":
+		pwd := strMap(payload, "password", "change-me")
+		sni := strMap(payload, "server_name", "www.microsoft.com")
+		q := url.Values{}
+		q.Set("version", "3")
+		q.Set("sni", sni)
+		return fmt.Sprintf("shadowtls://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
+
+	case "hysteria":
+		pwd := strMap(payload, "password", strMap(payload, "auth_str", "change-me"))
+		q := url.Values{}
+		q.Set("insecure", "1")
+		if obfs := strMap(payload, "obfs", ""); obfs != "" {
+			q.Set("obfs", obfs)
+		}
+		return fmt.Sprintf("hysteria://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
+
+	case "anytls":
+		pwd := strMap(payload, "password", "change-me")
+		q := url.Values{}
+		q.Set("insecure", "1")
+		return fmt.Sprintf("anytls://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
 
 	default:
 		return fmt.Sprintf("ss://%s@%s:%d#%s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("aes-128-gcm:change-me@%s:%d", host, port))), host, port, url.QueryEscape(tag))

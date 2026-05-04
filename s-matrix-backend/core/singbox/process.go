@@ -156,17 +156,21 @@ func (m *SingboxManager) startLocked() error {
 }
 
 func (m *SingboxManager) killStrayLocked() {
-	out, err := exec.Command("pgrep", "-f", "sing-box.*run.*-c").Output()
+	out, err := exec.Command("pgrep", "-af", "sing-box.*run.*-c").Output()
 	if err != nil {
 		return
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || !strings.Contains(line, m.ConfigPath) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
 			continue
 		}
 		var pid int
-		if _, err := fmt.Sscanf(line, "%d", &pid); err != nil || pid <= 0 || pid == os.Getpid() {
+		if _, err := fmt.Sscanf(fields[0], "%d", &pid); err != nil || pid <= 0 || pid == os.Getpid() {
 			continue
 		}
 		if m.cmd != nil && m.cmd.Process != nil && m.cmd.Process.Pid == pid {

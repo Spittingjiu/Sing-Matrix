@@ -113,8 +113,9 @@ func rebuildFromDB(db *gorm.DB, manager *singbox.SingboxManager, configPath stri
 	edges := make([]singbox.UIEdge, 0)
 
 	typeMap := map[string]string{
-		"vless": "inbound-reality", "hysteria2": "inbound-hy2", "vmess": "inbound-vmess",
+		"vless": "inbound-reality", "hysteria2": "inbound-hy2", "hysteria": "inbound-hysteria", "vmess": "inbound-vmess",
 		"trojan": "inbound-trojan", "shadowsocks": "inbound-ss", "socks": "inbound-socks", "http": "inbound-http",
+		"tuic": "inbound-tuic", "naive": "inbound-naive", "shadowtls": "inbound-shadowtls", "anytls": "inbound-anytls",
 	}
 
 	for _, ib := range inbounds {

@@ -28,6 +28,19 @@ type UIEdge struct {
 	Target string `json:"target" binding:"required"`
 }
 
+func requireTLSCert(data map[string]interface{}, protocol string) (string, string, error) {
+	cert := str(data, "certificate_path", str(data, "cert_path", ""))
+	key := str(data, "key_path", "")
+	if cert == "" || key == "" {
+		return "", "", fmt.Errorf("%s requires certificate_path and key_path", protocol)
+	}
+	return cert, key, nil
+}
+
+func finalMaskOf(data map[string]interface{}) string {
+	return str(data, "finalmask", str(data, "final_mask", str(data, "mask", "")))
+}
+
 func CompileToSingbox(uiData UIData) (Config, error) {
 	cfg := Config{Log: &Log{Level: "info", Timestamp: true}, DNS: &DNS{Servers: []DNSServer{}}, Inbounds: []Inbound{}, Outbounds: []Outbound{{Type: "direct", Tag: "direct"}, {Type: "block", Tag: "block"}}, Route: Route{RuleSets: []RouteRuleSet{}, Rules: []RouteRule{}, Final: "direct"}}
 	byID := map[string]UINode{}
@@ -56,6 +69,63 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
 			in := NewRealityInbound(tagOf(node), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"), str(node.Data, "private_key", ""), str(node.Data, "public_key", ""), firstShortID(node.Data), dest)
+			in = withFinalMaskTransport(in, finalMaskOf(node.Data))
+			cfg.Inbounds = append(cfg.Inbounds, in)
+			inboundTags[node.ID] = in.Tag
+		case "inbound-hysteria":
+			cert, key, err := requireTLSCert(node.Data, "hysteria")
+			if err != nil {
+				return cfg, err
+			}
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewHysteriaInbound(tagOf(node), port, str(node.Data, "password", str(node.Data, "auth_str", "change-me")), num(node.Data, "up_mbps", 100), num(node.Data, "down_mbps", 100), str(node.Data, "obfs", finalMaskOf(node.Data)), cert, key)
+			cfg.Inbounds = append(cfg.Inbounds, in)
+			inboundTags[node.ID] = in.Tag
+		case "inbound-tuic":
+			cert, key, err := requireTLSCert(node.Data, "tuic")
+			if err != nil {
+				return cfg, err
+			}
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewTUICInbound(tagOf(node), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"), str(node.Data, "password", "change-me"), str(node.Data, "congestion_control", "cubic"), cert, key)
+			cfg.Inbounds = append(cfg.Inbounds, in)
+			inboundTags[node.ID] = in.Tag
+		case "inbound-naive":
+			cert, key, err := requireTLSCert(node.Data, "naive")
+			if err != nil {
+				return cfg, err
+			}
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewNaiveInbound(tagOf(node), port, str(node.Data, "username", "user"), str(node.Data, "password", "change-me"), str(node.Data, "network", "tcp"), str(node.Data, "quic_congestion_control", ""), cert, key)
+			cfg.Inbounds = append(cfg.Inbounds, in)
+			inboundTags[node.ID] = in.Tag
+		case "inbound-shadowtls":
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewShadowTLSInbound(tagOf(node), port, str(node.Data, "password", "change-me"), str(node.Data, "server_name", str(node.Data, "sni", "www.microsoft.com")), boolVal(node.Data, "strict_mode", false), str(node.Data, "wildcard_sni", ""))
+			cfg.Inbounds = append(cfg.Inbounds, in)
+			inboundTags[node.ID] = in.Tag
+		case "inbound-anytls":
+			cert, key, err := requireTLSCert(node.Data, "anytls")
+			if err != nil {
+				return cfg, err
+			}
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewAnyTLSInbound(tagOf(node), port, str(node.Data, "password", "change-me"), cert, key, stringList(node.Data, "padding_scheme"))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-vmess":
@@ -66,6 +136,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			in := NewVMessInbound(tagOf(node), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"),
 				str(node.Data, "network", "tcp"), str(node.Data, "path", "/"), str(node.Data, "host", ""),
 				str(node.Data, "security", "") == "tls", str(node.Data, "sni", str(node.Data, "server_name", "")))
+			in = withFinalMaskTransport(in, finalMaskOf(node.Data))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-trojan":
@@ -165,9 +236,10 @@ func nodeKind(node UINode) string {
 	label := strings.ToLower(strings.TrimSpace(node.Label + " " + node.ID + " " + str(node.Data, "label", "") + " " + str(node.Data, "tag", "")))
 	// Known inbound kinds
 	knownInbound := map[string]bool{
-		"inbound-reality": true, "inbound-hy2": true, "inbound-vmess": true,
+		"inbound-reality": true, "inbound-hy2": true, "inbound-hysteria": true, "inbound-vmess": true,
 		"inbound-trojan": true, "inbound-ss": true, "inbound-shadowsocks": true,
-		"inbound-socks": true, "inbound-http": true,
+		"inbound-socks": true, "inbound-http": true, "inbound-tuic": true,
+		"inbound-naive": true, "inbound-shadowtls": true, "inbound-anytls": true,
 	}
 	if knownInbound[kind] {
 		return kind
@@ -178,6 +250,16 @@ func nodeKind(node UINode) string {
 			return "inbound-hy2"
 		case strings.Contains(label, "reality") || strings.Contains(label, "vless"):
 			return "inbound-reality"
+		case strings.Contains(label, "tuic"):
+			return "inbound-tuic"
+		case strings.Contains(label, "naive"):
+			return "inbound-naive"
+		case strings.Contains(label, "shadowtls") || strings.Contains(label, "shadow tls"):
+			return "inbound-shadowtls"
+		case strings.Contains(label, "anytls") || strings.Contains(label, "any tls"):
+			return "inbound-anytls"
+		case strings.Contains(label, "hysteria1") || strings.Contains(label, "hysteria"):
+			return "inbound-hysteria"
 		case strings.Contains(label, "vmess"):
 			return "inbound-vmess"
 		case strings.Contains(label, "trojan"):
@@ -223,6 +305,47 @@ func num(data map[string]interface{}, key string, fallback int) int {
 	}
 	return fallback
 }
+func boolVal(data map[string]interface{}, key string, fallback bool) bool {
+	if data == nil {
+		return fallback
+	}
+	if v, ok := data[key].(bool); ok {
+		return v
+	}
+	if v, ok := data[key].(string); ok {
+		return strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+	}
+	return fallback
+}
+
+func stringList(data map[string]interface{}, key string) []string {
+	if data == nil {
+		return nil
+	}
+	switch v := data[key].(type) {
+	case []string:
+		return v
+	case []interface{}:
+		out := []string{}
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		out := []string{}
+		for _, part := range strings.Split(v, "\n") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				out = append(out, part)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 func firstShortID(data map[string]interface{}) string {
 	raw := str(data, "short_id", str(data, "short_ids", ""))
 	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ';' || r == ' ' || r == '\n' })

@@ -30,23 +30,39 @@ type DNSServer struct {
 }
 
 type Inbound struct {
-	Type       string                 `json:"type"`
-	Tag        string                 `json:"tag"`
-	Listen     string                 `json:"listen,omitempty"`
-	ListenPort int                    `json:"listen_port"`
-	Users      []User                 `json:"users,omitempty"`
-	TLS        map[string]interface{} `json:"tls,omitempty"`
-	Transport  map[string]interface{} `json:"transport,omitempty"`
-	Masquerade string                 `json:"masquerade,omitempty"`
-	Method     string                 `json:"method,omitempty"`
-	Password   string                 `json:"password,omitempty"`
-	Network    string                 `json:"network,omitempty"`
+	Type              string                 `json:"type"`
+	Tag               string                 `json:"tag"`
+	Listen            string                 `json:"listen,omitempty"`
+	ListenPort        int                    `json:"listen_port"`
+	Users             []User                 `json:"users,omitempty"`
+	TLS               map[string]interface{} `json:"tls,omitempty"`
+	Transport         map[string]interface{} `json:"transport,omitempty"`
+	Masquerade        string                 `json:"masquerade,omitempty"`
+	Method            string                 `json:"method,omitempty"`
+	Password          string                 `json:"password,omitempty"`
+	Network           string                 `json:"network,omitempty"`
+	UpMbps            int                    `json:"up_mbps,omitempty"`
+	DownMbps          int                    `json:"down_mbps,omitempty"`
+	Obfs              string                 `json:"obfs,omitempty"`
+	Version           int                    `json:"version,omitempty"`
+	Handshake         map[string]interface{} `json:"handshake,omitempty"`
+	StrictMode        bool                   `json:"strict_mode,omitempty"`
+	WildcardSNI       string                 `json:"wildcard_sni,omitempty"`
+	CongestionControl string                 `json:"congestion_control,omitempty"`
+	AuthTimeout       string                 `json:"auth_timeout,omitempty"`
+	Heartbeat         string                 `json:"heartbeat,omitempty"`
+	ZeroRTTHandshake  bool                   `json:"zero_rtt_handshake,omitempty"`
+	PaddingScheme     []string               `json:"padding_scheme,omitempty"`
 }
 
 type User struct {
+	Name     string `json:"name,omitempty"`
+	Username string `json:"username,omitempty"`
 	UUID     string `json:"uuid,omitempty"`
 	Flow     string `json:"flow,omitempty"`
 	Password string `json:"password,omitempty"`
+	Auth     string `json:"auth,omitempty"`
+	AuthStr  string `json:"auth_str,omitempty"`
 }
 
 type Outbound struct {
@@ -175,6 +191,76 @@ func normalizeShadowsocksPassword(method string, password string) string {
 	}
 	sum := sha256.Sum256([]byte(password))
 	return base64.StdEncoding.EncodeToString(sum[:keyLen])
+}
+
+func NewHysteriaInbound(tag string, port int, auth string, upMbps int, downMbps int, obfs string, certPath string, keyPath string) Inbound {
+	if upMbps <= 0 {
+		upMbps = 100
+	}
+	if downMbps <= 0 {
+		downMbps = 100
+	}
+	in := Inbound{Type: "hysteria", Tag: tag, Listen: "::", ListenPort: port, UpMbps: upMbps, DownMbps: downMbps, Users: []User{{Name: "default", AuthStr: auth}}}
+	if obfs != "" {
+		in.Obfs = obfs
+	}
+	if certPath != "" && keyPath != "" {
+		in.TLS = map[string]interface{}{"enabled": true, "certificate_path": certPath, "key_path": keyPath}
+	}
+	return in
+}
+
+func NewTUICInbound(tag string, port int, uuid string, password string, congestion string, certPath string, keyPath string) Inbound {
+	if congestion == "" {
+		congestion = "cubic"
+	}
+	in := Inbound{Type: "tuic", Tag: tag, Listen: "::", ListenPort: port, Users: []User{{Name: "default", UUID: uuid, Password: password}}, CongestionControl: congestion, AuthTimeout: "3s", Heartbeat: "10s"}
+	if certPath != "" && keyPath != "" {
+		in.TLS = map[string]interface{}{"enabled": true, "certificate_path": certPath, "key_path": keyPath}
+	}
+	return in
+}
+
+func NewNaiveInbound(tag string, port int, username string, password string, network string, congestion string, certPath string, keyPath string) Inbound {
+	if network == "" {
+		network = "tcp"
+	}
+	in := Inbound{Type: "naive", Tag: tag, Listen: "::", ListenPort: port, Network: network, Users: []User{{Username: username, Password: password}}}
+	if congestion != "" {
+		in.CongestionControl = congestion
+	}
+	if certPath != "" && keyPath != "" {
+		in.TLS = map[string]interface{}{"enabled": true, "certificate_path": certPath, "key_path": keyPath}
+	}
+	return in
+}
+
+func NewShadowTLSInbound(tag string, port int, password string, serverName string, strict bool, wildcard string) Inbound {
+	if serverName == "" {
+		serverName = "www.microsoft.com"
+	}
+	return Inbound{Type: "shadowtls", Tag: tag, Listen: "::", ListenPort: port, Version: 3, Users: []User{{Name: "default", Password: password}}, Handshake: map[string]interface{}{"server": serverName, "server_port": 443}, StrictMode: strict, WildcardSNI: wildcard}
+}
+
+func NewAnyTLSInbound(tag string, port int, password string, certPath string, keyPath string, padding []string) Inbound {
+	in := Inbound{Type: "anytls", Tag: tag, Listen: "::", ListenPort: port, Users: []User{{Name: "default", Password: password}}, PaddingScheme: padding}
+	if certPath != "" && keyPath != "" {
+		in.TLS = map[string]interface{}{"enabled": true, "certificate_path": certPath, "key_path": keyPath}
+	}
+	return in
+}
+
+func withFinalMaskTransport(in Inbound, finalMask string) Inbound {
+	if finalMask == "" {
+		return in
+	}
+	if in.Transport == nil {
+		in.Transport = map[string]interface{}{"type": "ws"}
+	}
+	if _, ok := in.Transport["path"]; !ok {
+		in.Transport["path"] = finalMask
+	}
+	return in
 }
 
 func NewSocksInbound(tag string, port int) Inbound {
