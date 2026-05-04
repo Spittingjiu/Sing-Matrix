@@ -13,7 +13,7 @@ const { t, locale } = useI18n()
 interface InboundRow { id: number; tag: string; type: string; port: number; payload: string; enabled: boolean }
 const inbounds = ref<InboundRow[]>([])
 const deploying = ref(false); const successText = ref(''); const errorText = ref('')
-const shareDialog = ref(false); const shareLinks = ref<string[]>([])
+const shareDialog = ref(false); const shareLinks = ref<string[]>([]); const shareMode = ref<'oneclick'|'inbound'>('oneclick')
 const subscriptionUrl = ref(`${location.origin}/api/v1/sub/default`); const copied = ref('')
 const activeTab = ref<'nodes'|'settings'|'token'|'terminal'>('nodes'); const sidebarOpen = ref(false)
 const showModal = ref(false); const editId = ref<number|null>(null); const searchQ = ref('')
@@ -35,10 +35,11 @@ function navTo(t:'nodes'|'settings'|'token'|'terminal'){activeTab.value=t;sideba
 async function loadStatus(){try{const r=await apiFetch('/api/v1/system/status');if(r.ok){const s=await r.json();status.value={...status.value,sing_box_running:s.sing_box_running,cpu:Math.round(s.cpu_percent||0),mem:Math.round(s.memory_percent||0),version:s.singbox_version||status.value.version}}}catch{}}
 async function loadInbounds(){try{const r=await apiFetch('/api/v1/inbounds');if(r.ok)inbounds.value=(await r.json()).obj||[]}catch(err){errorText.value=String(err)}}
 
-async function oneClick(kind:'reality'|'hy2'){deploying.value=true;successText.value='';errorText.value='';try{const res=await apiFetch(`/api/v1/quick/${kind}`,{method:'POST'});const data=await res.json();if(!res.ok)throw new Error(data.error||'unknown');shareLinks.value=data.links||[];subscriptionUrl.value=data.subscription||`${location.origin}/api/v1/sub/default`;successText.value=kind==='reality'?`REALITY 已部署，端口 ${data.port}`:`HY2 已部署，端口 ${data.port}`;shareDialog.value=true;await loadInbounds()}catch(err){errorText.value=String(err)}finally{deploying.value=false}}
+async function oneClick(kind:'reality'|'hy2'){deploying.value=true;successText.value='';errorText.value='';try{const res=await apiFetch(`/api/v1/quick/${kind}`,{method:'POST'});const data=await res.json();if(!res.ok)throw new Error(data.error||'unknown');shareLinks.value=data.links||[];subscriptionUrl.value=data.subscription||`${location.origin}/api/v1/sub/default`;successText.value=kind==='reality'?`REALITY 已部署，端口 ${data.port}`:`HY2 已部署，端口 ${data.port}`;shareDialog.value=true;shareMode.value='oneclick';await loadInbounds()}catch(err){errorText.value=String(err)}finally{deploying.value=false}}
 async function toggleInbound(id:number){try{await apiFetch(`/api/v1/inbounds/${id}/toggle`,{method:'POST'});await loadInbounds()}catch(err){errorText.value=String(err)}}
 async function deleteInbound(id:number){if(!confirm('确认删除？'))return;try{await apiFetch(`/api/v1/inbounds/${id}`,{method:'DELETE'});await loadInbounds();successText.value='已删除';setTimeout(()=>successText.value='',3000)}catch(err){errorText.value=String(err)}}
 async function copyInboundLink(id:number){try{const r=await apiFetch(`/api/v1/inbounds/${id}/links`);const d=await r.json();const l=(d.links||[])[0];if(!l)throw new Error('no link');await navigator.clipboard.writeText(l);copied.value='已复制';setTimeout(()=>copied.value='',1800)}catch(err){errorText.value=String(err)}}
+async function showInboundQR(id:number){try{const r=await apiFetch(`/api/v1/inbounds/${id}/links`);const d=await r.json();shareLinks.value=d.links||[];shareDialog.value=true;shareMode.value='inbound'}catch(err){errorText.value=String(err)}}
 
 function dbTypeToProtocol(dbType:string):string{const m:Record<string,string>={vless:'reality',hysteria2:'hy2',vmess:'vmess',trojan:'trojan',shadowsocks:'ss',socks:'socks',http:'http'};return m[dbType]||'reality'}
 async function openAdd(){editId.value=null;fRemark.value='';fPort.value=0;fProtocol.value='reality';fNetwork.value='tcp';fSecurity.value='reality';fUUID.value='';fPassword.value='';fMethod.value='aes-128-gcm';fSNI.value='www.microsoft.com';fPath.value='/';fHost.value='';fDest.value='www.microsoft.com:443';fPrivKey.value='';fPubKey.value='';fShortID.value=randomHex(8);await genRealityKeys();showModal.value=true}
@@ -90,7 +91,7 @@ onMounted(async()=>{await loadStatus();await loadInbounds()})
 <section class="suigo-card"><div v-if="!filtered.length" class="p-10 text-center text-slate-400">暂无节点。点击「+ 新增」或「一键 REALITY/HY2」快速部署。</div>
 <div v-else class="suigo-node-list"><div v-for="ib in filtered" :key="ib.id" class="suigo-node-row">
 <div class="flex items-center gap-3 min-w-0"><span class="suigo-node-tag" :class="typeBadge(ib.type)">{{ typeLabel(ib.type) }}</span><div class="min-w-0"><div class="text-sm font-bold truncate">{{ ib.tag }}</div><div class="text-xs text-slate-500">port: {{ ib.port }}</div></div></div>
-<div class="flex items-center gap-1 flex-shrink-0"><button class="suigo-node-btn" @click="toggleInbound(ib.id)" :title="ib.enabled?'停用':'启用'">{{ ib.enabled?'⏸':'▶️' }}</button><button class="suigo-node-btn" @click="openEdit(ib)" title="编辑">✏️</button><button class="suigo-node-btn" @click="copyInboundLink(ib.id)" title="复制链接">📋</button><button class="suigo-node-del" @click="deleteInbound(ib.id)">删除</button></div>
+<div class="flex items-center gap-1 flex-shrink-0"><button class="suigo-node-btn" @click="toggleInbound(ib.id)" :title="ib.enabled?'停用':'启用'">{{ ib.enabled?'⏸':'▶️' }}</button><button class="suigo-node-btn" @click="openEdit(ib)" title="编辑">✏️</button><button class="suigo-node-btn" @click="copyInboundLink(ib.id)" title="复制链接">📋</button><button class="suigo-node-btn" @click="showInboundQR(ib.id)" title="二维码">📱</button><button class="suigo-node-del" @click="deleteInbound(ib.id)">删除</button></div>
 </div></div></section>
 </div>
 
@@ -129,8 +130,8 @@ onMounted(async()=>{await loadStatus();await loadInbounds()})
 <button class="suigo-primary w-full text-sm mt-3" @click="submitEdit">{{ editId?'保存修改':'创建节点' }}</button></div></div>
 
 <!-- Share Modal (only from one-click) -->
-<div v-if="shareDialog" class="suigo-modal-bg" @click.self="shareDialog=false"><section class="suigo-modal"><div class="suigo-modal-header"><div><p class="text-xs font-bold uppercase tracking-widest text-emerald-600">部署完成</p><h2 class="mt-2 text-2xl font-black">客户端链接 / 订阅</h2></div><button class="suigo-pill" @click="shareDialog=false">关闭</button></div>
-<div class="suigo-modal-sub"><div class="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">订阅地址</div><div class="break-all font-mono text-sm text-slate-700">{{ subscriptionUrl }}</div><button class="suigo-secondary mt-3" @click="copyText(subscriptionUrl,'已复制')">复制</button></div>
+<div v-if="shareDialog" class="suigo-modal-bg" @click.self="shareDialog=false"><section class="suigo-modal"><div class="suigo-modal-header"><div><p class="text-xs font-bold uppercase tracking-widest text-emerald-600">{{ shareMode==='oneclick'?'部署完成':'节点二维码' }}</p><h2 class="mt-2 text-2xl font-black">{{ shareMode==='oneclick'?'客户端链接 / 订阅':'分享链接' }}</h2></div><button class="suigo-pill" @click="shareDialog=false">关闭</button></div>
+<div v-if="shareMode==='oneclick'" class="suigo-modal-sub"><div class="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">订阅地址</div><div class="break-all font-mono text-sm text-slate-700">{{ subscriptionUrl }}</div><button class="suigo-secondary mt-3" @click="copyText(subscriptionUrl,'已复制')">复制</button></div>
 <div v-for="link in shareLinks" :key="link" class="suigo-modal-link"><div><div class="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">分享链接</div><div class="break-all rounded-xl bg-slate-50 p-3 font-mono text-xs text-slate-700">{{ link }}</div><button class="suigo-secondary mt-3" @click="copyText(link,'已复制')">复制</button></div><div class="flex items-center justify-center rounded-2xl bg-white p-4"><QrcodeVue :value="link" :size="156" level="M"/></div></div></section></div>
 
 <div v-if="copied" class="suigo-toast">{{ copied }}</div>
