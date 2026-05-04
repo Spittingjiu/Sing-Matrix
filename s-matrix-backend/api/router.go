@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
+	"gorm.io/gorm"
 	"s-matrix/core/singbox"
 )
 
@@ -15,6 +16,7 @@ type RouterDeps struct {
 	Manager    *singbox.SingboxManager
 	ConfigPath string
 	LogPath    string
+	DB         *gorm.DB
 }
 
 func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
@@ -34,9 +36,15 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 	secured.GET("/singbox/share-links", ShareLinksHandler(dep.ConfigPath))
 	secured.GET("/logs/ws", LogsWSHandler(dep.LogPath))
 	secured.GET("/ports/available", AvailablePortHandler)
-	secured.POST("/quick/reality", QuickRealityHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath}))
-	secured.POST("/quick/hy2", QuickHY2Handler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath}))
+	secured.POST("/quick/reality", QuickRealityHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB}))
+	secured.POST("/quick/hy2", QuickHY2Handler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB}))
 	secured.PUT("/inbounds/rename", RenameInboundHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath}))
+	if dep.DB != nil {
+		secured.GET("/inbounds", ListInboundsHandler(dep.DB))
+		secured.POST("/inbounds/:id/toggle", ToggleInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
+		secured.DELETE("/inbounds/:id", DeleteInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
+		secured.GET("/inbounds/:id/links", InboundLinksHandler(dep.ConfigPath))
+	}
 	secured.POST("/singbox/compile", func(c *gin.Context) {
 		var ui singbox.UIData
 		if err := c.ShouldBindJSON(&ui); err != nil {

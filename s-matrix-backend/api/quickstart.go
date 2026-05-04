@@ -12,12 +12,15 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"s-matrix/core/singbox"
+	"s-matrix/models"
 )
 
 type quickDeps struct {
 	Manager    *singbox.SingboxManager
 	ConfigPath string
+	DB         *gorm.DB
 }
 
 func QuickRealityHandler(dep quickDeps) gin.HandlerFunc {
@@ -87,6 +90,34 @@ func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string
 	if err := dep.Manager.Restart(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "config": cfg})
 		return
+	}
+	// Persist to DB
+	if dep.DB != nil {
+		for _, n := range topo.Nodes {
+			if n.Kind == "inbound-reality" || n.Kind == "inbound-hy2" {
+				sbType := "vless"
+				if n.Kind == "inbound-hy2" {
+					sbType = "hysteria2"
+				}
+				pTag, _ := n.Data["tag"].(string)
+				pPort := port // use the port parameter directly
+				payload := map[string]interface{}{}
+				for _, k := range []string{"private_key", "public_key", "short_id", "uuid", "password", "dest"} {
+					if v, ok := n.Data[k]; ok {
+						payload[k] = v
+					}
+				}
+				payloadBytes, _ := json.Marshal(payload)
+				dep.DB.Where("tag = ?", pTag).Delete(&models.Inbound{})
+				dep.DB.Create(&models.Inbound{
+					Tag:     pTag,
+					Type:    sbType,
+					Port:    int(pPort),
+					Enabled: true,
+					Payload: string(payloadBytes),
+				})
+			}
+		}
 	}
 	links, _ := BuildShareLinks(dep.ConfigPath, publicHost(c))
 	c.JSON(http.StatusOK, gin.H{"ok": true, "type": typ, "port": port, "nodes": topo.Nodes, "edges": topo.Edges, "links": links, "subscription": subscriptionURL(c), "running": dep.Manager.Status(), "config": cfg})

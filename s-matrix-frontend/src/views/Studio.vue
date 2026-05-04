@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toggleLocale } from '../i18n'
 import { apiFetch, clearToken } from '../api/http'
@@ -10,8 +10,11 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 const { t, locale } = useI18n()
 
-interface NodeRow { id: string; kind: string; label: string; tag: string; port?: number }
-const nodes = ref<NodeRow[]>([])
+interface InboundRow {
+  id: number; tag: string; type: string; port: number
+  payload: string; enabled: boolean
+}
+const inbounds = ref<InboundRow[]>([])
 const deploying = ref(false)
 const successText = ref('')
 const errorText = ref('')
@@ -19,244 +22,291 @@ const shareDialog = ref(false)
 const shareLinks = ref<string[]>([])
 const subscriptionUrl = ref(`${location.origin}/api/v1/sub/default`)
 const copied = ref('')
-const activeTab = ref<'nodes' | 'terminal'>('nodes')
-const addMenu = ref(false)
-const inboundType = ref('reality')
-const ruleTag = ref('')
-const ruleUrl = ref('')
-const outTag = ref('')
-const portSuggestion = ref(0)
+const activeTab = ref<'nodes' | 'settings' | 'token' | 'terminal'>('nodes')
 const sidebarOpen = ref(false)
-const deployButtonClass = computed(() => deploying.value ? 'animate-pulse shadow-[0_0_30px_rgba(16,185,129,.45)]' : '')
+const showModal = ref(false)
+const editId = ref<number | null>(null)
+const searchQ = ref('')
+const status = ref({ sing_box_running: false, cpu: 0, mem: 0 })
 
-function randomPassword(len = 28) {
-  const c = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789_-@#%'
-  return Array.from(crypto.getRandomValues(new Uint8Array(len)), b => c[b % c.length]).join('')
-}
-function randomHex(bytes = 8) {
-  return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), b => b.toString(16).padStart(2, '0')).join('')
-}
+// Form fields
+const fRemark = ref('')
+const fPort = ref(0)
+const fType = ref('reality')
 
-async function fetchPort(preferred = 0) {
-  try { const r = await apiFetch(`/api/v1/ports/available?preferred=${preferred}`); if (r.ok) return Number((await r.json()).port) } catch {}
-  return 50000 + Math.floor(Math.random() * 10001)
-}
-async function suggestPort() { portSuggestion.value = await fetchPort(0) }
-
-function addInbound() {
-  const id = `in-${Date.now().toString(36)}`
-  const port = portSuggestion.value || 50000 + Math.floor(Math.random() * 10001)
-  if (inboundType.value === 'hy2') nodes.value.push({ id, kind: 'inbound-hy2', label: `HY2 :${port}`, tag: `hy2-${id}`, port })
-  else nodes.value.push({ id, kind: 'inbound-reality', label: `REALITY :${port}`, tag: `reality-${id}`, port })
-  portSuggestion.value = 0; addMenu.value = false
-}
-function addRule() {
-  const id = `rule-${Date.now().toString(36)}`
-  const tag = ruleTag.value || `srs-${id}`
-  nodes.value.push({ id, kind: 'rule-srs', label: `SRS: ${tag}`, tag })
-  ruleTag.value = ''; ruleUrl.value = ''; addMenu.value = false
-}
-function addOutbound() {
-  const id = `out-${Date.now().toString(36)}`
-  const tag = outTag.value || `direct-${id}`
-  nodes.value.push({ id, kind: 'outbound-direct', label: `出站: ${tag}`, tag })
-  outTag.value = ''; addMenu.value = false
-}
-function removeNode(id: string) { nodes.value = nodes.value.filter(n => n.id !== id) }
-
-function kindLabel(kind: string) {
-  if (kind === 'inbound-hy2') return 'HY2'
-  if (kind === 'inbound-reality') return 'REALITY'
-  if (kind === 'rule-srs') return 'SRS'
-  return 'OUT'
-}
-function kindBadge(kind: string) {
-  if (kind.startsWith('inbound-hy2')) return 'bg-emerald-50 text-emerald-700 border-emerald-200'
-  if (kind.startsWith('inbound-reality')) return 'bg-cyan-50 text-cyan-700 border-cyan-200'
-  if (kind.startsWith('rule')) return 'bg-violet-50 text-violet-700 border-violet-200'
-  return 'bg-amber-50 text-amber-700 border-amber-200'
+function navTo(tab: 'nodes' | 'settings' | 'token' | 'terminal') {
+  activeTab.value = tab; sidebarOpen.value = false
 }
 
-function buildTopology() {
-  const ins = nodes.value.filter(n => n.kind.startsWith('inbound-'))
-  const rules = nodes.value.filter(n => n.kind.startsWith('rule-'))
-  const outs = nodes.value.filter(n => n.kind.startsWith('outbound-'))
-  const topoNodes: any[] = []
-  const topoEdges: any[] = []
-  for (const n of ins) topoNodes.push({ id: n.id, position: { x: 0, y: 0 }, label: n.label, data: { kind: n.kind, tag: n.tag, port: n.port, password: randomPassword(), dest: 'www.microsoft.com', short_id: randomHex(8), private_key: randomHex(32), uuid: crypto.randomUUID?.() || '00000000-0000-0000-0000-000000000000' } })
-  for (const n of rules) topoNodes.push({ id: n.id, position: { x: 0, y: 0 }, label: n.label, data: { kind: n.kind, tag: n.tag, url: ruleUrl.value || 'https://example.com/global.srs' } })
-  for (const n of outs) topoNodes.push({ id: n.id, position: { x: 0, y: 0 }, label: n.label, data: { kind: n.kind, tag: n.tag } })
-  if (outs.length === 0) topoNodes.push({ id: 'default-direct', position: { x: 0, y: 0 }, label: 'Direct', data: { kind: 'outbound-direct', tag: 'direct' } })
-  const outId = outs.length > 0 ? outs[0].id : 'default-direct'
-  for (const inn of ins) for (const rn of rules) topoEdges.push({ id: `e-${inn.id}-${rn.id}`, source: inn.id, target: rn.id })
-  for (const rn of rules) topoEdges.push({ id: `e-${rn.id}-out`, source: rn.id, target: outId })
-  return { nodes: topoNodes, edges: topoEdges }
-}
-
-async function deployTopology() {
-  deploying.value = true; successText.value = ''; errorText.value = ''
+async function loadStatus() {
   try {
-    const topo = buildTopology()
-    const res = await apiFetch('/api/v1/singbox/compile', { method: 'POST', body: JSON.stringify(topo) })
-    const text = await res.text()
-    if (!res.ok) throw new Error(text)
-    successText.value = t('deploySuccessful')
-    window.setTimeout(() => successText.value = '', 5200)
-  } catch (err) { errorText.value = String(err) } finally { deploying.value = false }
+    const r = await apiFetch('/api/v1/system/status')
+    if (r.ok) {
+      const s = await r.json()
+      status.value = { sing_box_running: s.sing_box_running, cpu: Math.round(s.cpu_percent || 0), mem: Math.round(s.memory_percent || 0) }
+    }
+  } catch {}
 }
-
-async function copyText(text: string, label = 'copied') { await navigator.clipboard.writeText(text); copied.value = label; window.setTimeout(() => copied.value = '', 1800) }
-async function loadShareLinks() {
-  const res = await apiFetch('/api/v1/singbox/share-links'); const text = await res.text(); if (!res.ok) throw new Error(text)
-  const data = JSON.parse(text); shareLinks.value = data.links || []; subscriptionUrl.value = data.subscription || `${location.origin}/api/v1/sub/default`; shareDialog.value = true
+async function loadInbounds() {
+  try {
+    const r = await apiFetch('/api/v1/inbounds')
+    if (!r.ok) throw new Error(await r.text())
+    const data = await r.json()
+    inbounds.value = data.obj || []
+  } catch (err) { errorText.value = String(err) }
 }
 
 async function oneClick(kind: 'reality' | 'hy2') {
   deploying.value = true; successText.value = ''; errorText.value = ''
   try {
     const res = await apiFetch(`/api/v1/quick/${kind}`, { method: 'POST' })
-    const text = await res.text()
-    if (!res.ok) throw new Error(text)
-    const data = JSON.parse(text)
-    nodes.value = (data.nodes || []).map((n: any) => ({ id: n.id, kind: n.kind || n.data?.kind, label: n.label, tag: n.data?.tag || n.id, port: n.data?.port }))
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'unknown error')
     shareLinks.value = data.links || []
     subscriptionUrl.value = data.subscription || `${location.origin}/api/v1/sub/default`
     successText.value = kind === 'reality' ? `REALITY 已部署，端口 ${data.port}` : `HY2 已部署，端口 ${data.port}`
     shareDialog.value = true
-    window.setTimeout(() => successText.value = '', 5200)
+    await loadInbounds()
   } catch (err) { errorText.value = String(err) } finally { deploying.value = false }
 }
 
-function navTo(tab: 'nodes' | 'terminal') { activeTab.value = tab; sidebarOpen.value = false }
+async function toggleInbound(id: number) {
+  try {
+    const r = await apiFetch(`/api/v1/inbounds/${id}/toggle`, { method: 'POST' })
+    if (!r.ok) throw new Error(await r.text())
+    await loadInbounds()
+  } catch (err) { errorText.value = String(err) }
+}
+async function deleteInbound(id: number) {
+  if (!confirm('确认删除该节点？')) return
+  try {
+    const r = await apiFetch(`/api/v1/inbounds/${id}`, { method: 'DELETE' })
+    if (!r.ok) throw new Error(await r.text())
+    await loadInbounds()
+    successText.value = '节点已删除'
+    setTimeout(() => successText.value = '', 3000)
+  } catch (err) { errorText.value = String(err) }
+}
+async function copyInboundLink(id: number) {
+  try {
+    const r = await apiFetch(`/api/v1/inbounds/${id}/links`)
+    if (!r.ok) throw new Error(await r.text())
+    const data = await r.json()
+    const link = (data.links || [])[0]
+    if (!link) throw new Error('no link')
+    await navigator.clipboard.writeText(link)
+    copied.value = '已复制'
+    setTimeout(() => copied.value = '', 1800)
+  } catch (err) { errorText.value = String(err) }
+}
+async function showInboundQR(id: number) {
+  try {
+    const r = await apiFetch(`/api/v1/inbounds/${id}/links`)
+    if (!r.ok) throw new Error(await r.text())
+    const data = await r.json()
+    shareLinks.value = data.links || []
+    shareDialog.value = true
+  } catch (err) { errorText.value = String(err) }
+}
+function openEdit(ib: InboundRow) {
+  editId.value = ib.id
+  fRemark.value = ib.tag
+  fPort.value = ib.port
+  fType.value = ib.type === 'hysteria2' ? 'hy2' : 'reality'
+  showModal.value = true
+}
+function openAdd() {
+  editId.value = null
+  fRemark.value = ''; fPort.value = 0; fType.value = 'reality'
+  showModal.value = true
+}
+async function submitEdit() {
+  try {
+    const remark = fRemark.value.trim()
+    if (!remark) return
+    // For now, rename via the existing rename API
+    const ib = inbounds.value.find(i => i.id === editId.value)
+    if (!ib) return
+    const r = await apiFetch('/api/v1/inbounds/rename', {
+      method: 'PUT',
+      body: JSON.stringify({ tag: ib.tag, new_tag: remark })
+    })
+    if (!r.ok) throw new Error(await r.text())
+    showModal.value = false
+    await loadInbounds()
+    successText.value = '节点已更新'
+    setTimeout(() => successText.value = '', 3000)
+  } catch (err) { errorText.value = String(err) }
+}
+async function copyText(text: string, label = 'copied') {
+  await navigator.clipboard.writeText(text); copied.value = label
+  setTimeout(() => copied.value = '', 1800)
+}
+
+const filtered = computed(() => {
+  const q = searchQ.value.toLowerCase()
+  if (!q) return inbounds.value
+  return inbounds.value.filter(i =>
+    `${i.tag} ${i.port} ${i.type}`.toLowerCase().includes(q)
+  )
+})
+
+onMounted(async () => {
+  await loadStatus()
+  await loadInbounds()
+})
 </script>
 
 <template>
   <main class="suigo-shell">
-    <!-- Mobile hamburger -->
+    <!-- Mobile bar -->
     <div class="suigo-mobile-bar">
-      <button class="suigo-hamburger" @click="sidebarOpen = !sidebarOpen" aria-label="菜单">
-        <span v-if="!sidebarOpen">☰</span><span v-else>✕</span>
-      </button>
+      <button class="suigo-hamburger" @click="sidebarOpen = !sidebarOpen">☰</button>
       <span class="suigo-mobile-title">S-Matrix</span>
-      <button class="suigo-pill" style="font-size:11px;padding:5px 10px" @click="oneClick('reality')" :disabled="deploying">⚡ REALITY</button>
+      <button class="suigo-pill" style="font-size:11px;padding:5px 10px" @click="oneClick('reality')" :disabled="deploying">⚡</button>
     </div>
-
-    <!-- Sidebar overlay (mobile) -->
     <div v-if="sidebarOpen" class="suigo-overlay" @click="sidebarOpen = false"></div>
 
     <div class="suigo-layout">
       <!-- Sidebar -->
       <aside class="suigo-sidebar" :class="{ 'suigo-sidebar-open': sidebarOpen }">
         <div class="suigo-sidebar-logo">
-          <img src="/favicon.svg" />
-          <div>
-            <h1>S-Matrix</h1>
-            <span>Sing-box 控制台</span>
-          </div>
+          <img src="/favicon.svg" /><div><h1>S-Matrix</h1><span>Sing-box 控制台</span></div>
         </div>
-
         <button class="suigo-nav-btn" :class="{ active: activeTab === 'nodes' }" @click="navTo('nodes')">
           <span class="suigo-nav-icon">⚡</span> 节点管理
         </button>
-        <button class="suigo-nav-btn" :class="{ active: activeTab === 'terminal' }" @click="navTo('terminal')">
-          <span class="suigo-nav-icon">💻</span> 全息终端
+        <button class="suigo-nav-btn" :class="{ active: activeTab === 'settings' }" @click="navTo('settings')">
+          <span class="suigo-nav-icon">⚙️</span> 面板设置
         </button>
-
+        <button class="suigo-nav-btn" :class="{ active: activeTab === 'token' }" @click="navTo('token')">
+          <span class="suigo-nav-icon">🔗</span> 对接Token
+        </button>
         <div class="suigo-sidebar-section">
           <div class="suigo-sidebar-label">快捷操作</div>
-          <button :disabled="deploying" class="suigo-nav-btn" style="color: #059669;" @click="oneClick('reality')">
+          <button :disabled="deploying" class="suigo-nav-btn" style="color:#059669" @click="oneClick('reality')">
             <span class="suigo-nav-icon">🔑</span> 一键 REALITY
           </button>
-          <button :disabled="deploying" class="suigo-nav-btn" style="color: #0891b2;" @click="oneClick('hy2')">
+          <button :disabled="deploying" class="suigo-nav-btn" style="color:#0891b2" @click="oneClick('hy2')">
             <span class="suigo-nav-icon">⚡</span> 一键 HY2
           </button>
         </div>
-
         <div class="suigo-sidebar-spacer"></div>
-
         <div class="suigo-sidebar-bottom">
           <button class="suigo-nav-btn" @click="toggleLocale()">
             <span class="suigo-nav-icon">🌐</span> {{ locale === 'zh' ? 'EN' : '中文' }}
           </button>
-          <button class="suigo-nav-btn" style="color: #dc2626;" @click="clearToken(); router.replace('/login')">
-            <span class="suigo-nav-icon">🚪</span> 登出
-          </button>
+          <button class="suigo-nav-btn" style="color:#dc2626" @click="clearToken(); router.replace('/login')">🚪 登出</button>
         </div>
       </aside>
 
-      <!-- Main Content -->
+      <!-- Content -->
       <div class="suigo-content">
-        <div v-show="activeTab === 'nodes'" class="space-y-5">
-          <div v-if="successText" class="suigo-alert suigo-alert-success">{{ successText }}</div>
-          <div v-if="errorText" class="suigo-alert suigo-alert-error">
-            <div class="mb-2 text-sm font-bold">部署异常</div>
-            <pre class="max-h-40 overflow-auto whitespace-pre-wrap text-xs">{{ errorText }}</pre>
-          </div>
+        <!-- Status Bar -->
+        <div class="suigo-status-bar">
+          <span class="suigo-status-badge" :class="status.sing_box_running ? 'ok' : 'bad'">sing-box:{{ status.sing_box_running ? '正常' : '异常' }}</span>
+          <span class="suigo-status-badge ok">CPU:{{ status.cpu }}%</span>
+          <span class="suigo-status-badge ok">MEM:{{ status.mem }}%</span>
+        </div>
 
+        <!-- Alerts -->
+        <div v-if="successText" class="suigo-alert suigo-alert-success">{{ successText }}</div>
+        <div v-if="errorText" class="suigo-alert suigo-alert-error">
+          <div class="mb-2 text-sm font-bold">异常</div>
+          <pre class="max-h-40 overflow-auto whitespace-pre-wrap text-xs">{{ errorText }}</pre>
+        </div>
+
+        <!-- Tab: Nodes -->
+        <div v-show="activeTab === 'nodes'" class="space-y-5">
           <div class="flex flex-wrap items-center gap-3">
-            <button :disabled="deploying" :class="deployButtonClass" class="suigo-primary text-sm" @click="deployTopology">
-              {{ deploying ? '部署中…' : '部署配置' }}
-            </button>
-            <button class="suigo-secondary text-sm" @click="loadShareLinks">客户端链接</button>
-            <button class="suigo-secondary text-sm" @click="copyText(subscriptionUrl, 'copied')">订阅地址</button>
-            <span v-if="copied" class="text-sm font-bold text-emerald-600">已复制</span>
+            <input v-model="searchQ" class="suigo-input flex-1" placeholder="搜索备注 / 端口 / 协议" style="min-width:200px" />
+            <button class="suigo-secondary text-sm" @click="loadInbounds">刷新节点</button>
+            <button class="suigo-primary text-sm" @click="openAdd">+ 新增</button>
           </div>
 
           <section class="suigo-card">
-            <div class="suigo-card-header">
-              <div>
-                <h2 class="text-lg font-black">节点列表</h2>
-                <p class="text-sm text-slate-500">添加入站、规则、出站节点</p>
-              </div>
-              <button class="suigo-primary !px-4 !py-2 text-sm" @click="suggestPort(); addMenu = !addMenu">+ 添加节点</button>
+            <div v-if="!filtered.length" class="p-10 text-center text-slate-400">
+              暂无节点。点击「+ 新增」或「一键 REALITY/HY2」快速部署。
             </div>
-
-            <div v-if="addMenu" class="suigo-add-panel">
-              <div class="suigo-add-grid">
-                <div class="suigo-add-card">
-                  <div class="suigo-add-card-title" style="color:#059669">入站节点</div>
-                  <select v-model="inboundType" class="suigo-input mb-2 w-full">
-                    <option value="reality">VLESS REALITY</option>
-                    <option value="hy2">Hysteria2</option>
-                  </select>
-                  <div class="mb-2 text-xs text-slate-500">建议端口: {{ portSuggestion || '—' }}</div>
-                  <button class="suigo-secondary w-full text-sm" @click="addInbound">添加</button>
-                </div>
-                <div class="suigo-add-card">
-                  <div class="suigo-add-card-title" style="color:#7c3aed">SRS 规则</div>
-                  <input v-model="ruleTag" class="suigo-input mb-2 w-full" placeholder="Tag (如 youtube)" />
-                  <input v-model="ruleUrl" class="suigo-input mb-2 w-full" placeholder="SRS URL (可选)" />
-                  <button class="suigo-secondary w-full text-sm" @click="addRule">添加</button>
-                </div>
-                <div class="suigo-add-card">
-                  <div class="suigo-add-card-title" style="color:#d97706">出站节点</div>
-                  <input v-model="outTag" class="suigo-input mb-2 w-full" placeholder="Tag (如 direct)" />
-                  <button class="suigo-secondary w-full text-sm" @click="addOutbound">添加</button>
-                </div>
-              </div>
-            </div>
-
-            <div v-if="nodes.length === 0" class="p-10 text-center text-slate-400">暂无节点。点击「+ 添加节点」或使用侧栏快捷操作快速开始。</div>
             <div v-else class="suigo-node-list">
-              <div v-for="node in nodes" :key="node.id" class="suigo-node-row">
-                <div class="flex items-center gap-3">
-                  <span class="rounded-full border px-2.5 py-1 text-xs font-bold" :class="kindBadge(node.kind)">{{ kindLabel(node.kind) }}</span>
-                  <div>
-                    <div class="text-sm font-bold text-slate-900">{{ node.label }}</div>
-                    <div class="text-xs text-slate-500">tag: {{ node.tag }}{{ node.port ? ` · port: ${node.port}` : '' }}</div>
+              <div v-for="ib in filtered" :key="ib.id" class="suigo-node-row">
+                <div class="flex items-center gap-3 min-w-0">
+                  <span class="suigo-node-tag" :class="ib.type === 'hysteria2' ? 'hy2' : 'reality'">{{ ib.type === 'hysteria2' ? 'HY2' : 'REALITY' }}</span>
+                  <div class="min-w-0">
+                    <div class="text-sm font-bold truncate">{{ ib.tag }}</div>
+                    <div class="text-xs text-slate-500">port: {{ ib.port }}</div>
                   </div>
                 </div>
-                <button class="suigo-node-del" @click="removeNode(node.id)">删除</button>
+                <div class="flex items-center gap-1 flex-shrink-0">
+                  <button class="suigo-node-btn" @click="toggleInbound(ib.id)" :title="ib.enabled ? '停用' : '启用'">
+                    {{ ib.enabled ? '⏸' : '▶️' }}
+                  </button>
+                  <button class="suigo-node-btn" @click="openEdit(ib)" title="编辑">✏️</button>
+                  <button class="suigo-node-btn" @click="copyInboundLink(ib.id)" title="复制链接">📋</button>
+                  <button class="suigo-node-btn" @click="showInboundQR(ib.id)" title="二维码">📱</button>
+                  <button class="suigo-node-del" @click="deleteInbound(ib.id)">删除</button>
+                </div>
               </div>
             </div>
           </section>
         </div>
 
-        <Terminal v-show="activeTab === 'terminal'" />
+        <!-- Tab: Settings -->
+        <div v-show="activeTab === 'settings'" class="suigo-card p-6">
+          <h2 class="text-lg font-black mb-4">面板设置</h2>
+          <div class="grid gap-4 md:grid-cols-2">
+            <div>
+              <div class="text-xs font-bold text-slate-500 uppercase mb-1">Sing-box 配置</div>
+              <button class="suigo-secondary w-full text-sm" @click="loadInbounds(); loadStatus()">刷新状态</button>
+            </div>
+            <div>
+              <div class="text-xs font-bold text-slate-500 uppercase mb-1">客户端订阅</div>
+              <div class="break-all font-mono text-xs bg-slate-50 rounded-xl p-3">{{ subscriptionUrl }}</div>
+              <button class="suigo-secondary w-full text-sm mt-2" @click="copyText(subscriptionUrl, '已复制')">复制订阅地址</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab: Token -->
+        <div v-show="activeTab === 'token'" class="space-y-5">
+          <section class="suigo-card p-6">
+            <h2 class="text-lg font-black mb-4">API Token（给 sui-sub 对接）</h2>
+            <p class="text-xs text-slate-500 mb-3">登录后通过 JWT Token 鉴权，有效期 7 天</p>
+            <button class="suigo-secondary text-sm" @click="clearToken(); router.replace('/login')">重新登录获取 Token</button>
+          </section>
+          <section class="suigo-card p-6">
+            <h2 class="text-lg font-black mb-4">一键对接到 sui-sub</h2>
+            <p class="text-xs text-slate-500 mb-3">在 sui-sub 中添加 SBUI 源，填入面板地址和 Token 即可自动拉取节点</p>
+            <div class="rounded-xl bg-slate-50 p-3 font-mono text-xs break-all">
+              面板地址: <strong>https://sbui.zzao.de</strong><br/>
+              订阅地址: <strong>{{ subscriptionUrl }}</strong>
+            </div>
+          </section>
+        </div>
+
+        <!-- Terminal -->
+        <div v-show="activeTab === 'terminal'"><Terminal /></div>
       </div>
     </div>
 
-    <!-- Share Dialog -->
+    <!-- Edit Modal -->
+    <div v-if="showModal" class="suigo-modal-bg" @click.self="showModal = false">
+      <div class="suigo-modal" style="max-width:480px">
+        <div class="suigo-modal-header">
+          <b>{{ editId ? '编辑节点' : '新增节点' }}</b>
+          <button class="suigo-pill" @click="showModal = false">关闭</button>
+        </div>
+        <input v-model="fRemark" class="suigo-input w-full mb-3" placeholder="备注 (tag)" />
+        <div class="mb-3 text-xs text-slate-500">端口: {{ fPort || '自动分配' }}</div>
+        <select v-model="fType" class="suigo-input w-full mb-3">
+          <option value="reality">VLESS REALITY</option>
+          <option value="hy2">Hysteria2</option>
+        </select>
+        <button class="suigo-primary w-full text-sm" @click="submitEdit">{{ editId ? '保存修改' : '创建节点' }}</button>
+      </div>
+    </div>
+
+    <!-- Share / QR Modal -->
     <div v-if="shareDialog" class="suigo-modal-bg" @click.self="shareDialog = false">
       <section class="suigo-modal">
         <div class="suigo-modal-header">
@@ -269,13 +319,13 @@ function navTo(tab: 'nodes' | 'terminal') { activeTab.value = tab; sidebarOpen.v
         <div class="suigo-modal-sub">
           <div class="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">订阅地址</div>
           <div class="break-all font-mono text-sm text-slate-700">{{ subscriptionUrl }}</div>
-          <button class="suigo-secondary mt-3" @click="copyText(subscriptionUrl, 'copied')">复制</button>
+          <button class="suigo-secondary mt-3" @click="copyText(subscriptionUrl, '已复制')">复制</button>
         </div>
         <div v-for="link in shareLinks" :key="link" class="suigo-modal-link">
           <div>
             <div class="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">分享链接</div>
             <div class="break-all rounded-xl bg-slate-50 p-3 font-mono text-xs text-slate-700">{{ link }}</div>
-            <button class="suigo-secondary mt-3" @click="copyText(link, 'copied')">复制</button>
+            <button class="suigo-secondary mt-3" @click="copyText(link, '已复制')">复制</button>
           </div>
           <div class="flex items-center justify-center rounded-2xl bg-white p-4">
             <QrcodeVue :value="link" :size="156" level="M" />
@@ -283,5 +333,8 @@ function navTo(tab: 'nodes' | 'terminal') { activeTab.value = tab; sidebarOpen.v
         </div>
       </section>
     </div>
+
+    <!-- Copied toast -->
+    <div v-if="copied" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[99] rounded-full bg-slate-900 text-white px-4 py-2 text-sm font-bold shadow-lg">{{ copied }}</div>
   </main>
 </template>

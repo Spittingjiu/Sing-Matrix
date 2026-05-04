@@ -61,11 +61,20 @@ body { margin: 0; }
 .suigo-add-grid { display: grid; gap: 16px; grid-template-columns: repeat(3,1fr); }
 .suigo-add-card { border: 1px solid #e2e8f0; border-radius: 16px; background: white; padding: 16px; }
 .suigo-add-card-title { font-size: 13px; font-weight: 800; margin-bottom: 8px; }
+.suigo-status-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.suigo-status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 5px 12px; border-radius: 999px; font-size: 11px; font-weight: 800; border: 1px solid; }
+.suigo-status-badge.ok { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+.suigo-status-badge.bad { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
 .suigo-node-list { }
 .suigo-node-list > * { border-bottom: 1px solid #f1f5f9; }
 .suigo-node-list > *:last-child { border-bottom: none; }
-.suigo-node-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; transition: background .12s; }
+.suigo-node-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 20px; transition: background .12s; }
 .suigo-node-row:hover { background: #f8fafc; }
+.suigo-node-tag { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 10px; font-weight: 800; border: 1px solid; }
+.suigo-node-tag.reality { background: #ecfeff; color: #155e75; border-color: #a5f3fc; }
+.suigo-node-tag.hy2 { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+.suigo-node-btn { border: 1px solid #e2e8f0; border-radius: 10px; background: white; padding: 4px 8px; font-size: 14px; cursor: pointer; transition: all .12s; }
+.suigo-node-btn:hover { border-color: #10b98155; background: #f0fdf4; }
 .suigo-node-del { border: 1px solid #fecaca; border-radius: 12px; background: transparent; color: #dc2626; padding: 6px 12px; font-size: 12px; font-weight: 700; cursor: pointer; transition: all .12s; }
 .suigo-node-del:hover { background: #fef2f2; }
 

@@ -15,7 +15,8 @@ func main() {
 	configPath := env("SMATRIX_CONFIG", "./config.json")
 	logPath := env("SMATRIX_SINGBOX_LOG", "./singbox.log")
 	singboxBin := env("SMATRIX_SINGBOX_BIN", "sing-box")
-	if _, err := models.OpenDatabase(dbPath); err != nil {
+	db, err := models.OpenDatabase(dbPath)
+	if err != nil {
 		log.Fatalf("database init failed: %v", err)
 	}
 	if err := singbox.GenerateTestConfigFile("config_test.json"); err != nil {
@@ -30,7 +31,7 @@ func main() {
 			log.Printf("sing-box auto-started with %s", configPath)
 		}
 	}
-	if err := api.NewRouter(staticFiles, api.RouterDeps{Manager: manager, ConfigPath: configPath, LogPath: logPath}).Run(addr); err != nil {
+	if err := api.NewRouter(staticFiles, api.RouterDeps{Manager: manager, ConfigPath: configPath, LogPath: logPath, DB: db}).Run(addr); err != nil {
 		log.Fatal(err)
 	}
 }
