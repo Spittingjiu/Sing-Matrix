@@ -161,9 +161,12 @@ async function submitEdit() {
       data.dest = fDest.value; data.server_name = fSNI.value
       data.private_key = fPrivKey.value; data.public_key = fPubKey.value; data.short_id = fShortID.value
     }
-    // Always rebuild via compile (handles both add and edit)
-    const topo = { nodes: [{ id: editId.value ? 'edit-in' : 'new-in', kind, label: tag, data }], edges: [] }
-    const r = await apiFetch('/api/v1/singbox/compile', { method: 'POST', body: JSON.stringify(topo) })
+    // If editing, delete old inbound from DB first to avoid duplicates
+    if (editId.value) {
+      await apiFetch(`/api/v1/inbounds/${editId.value}`, { method: 'DELETE' })
+    }
+    // Rebuild config with new parameters
+    const r = await apiFetch('/api/v1/singbox/compile', { method: 'POST', body: JSON.stringify({ nodes: [{ id: 'edit-in', kind, label: tag, data }], edges: [] }) })
     if (!r.ok) throw new Error(await r.text())
     showModal.value = false; await loadInbounds()
     successText.value = editId.value ? '节点已更新' : '节点已创建'; setTimeout(() => successText.value = '', 3000)
