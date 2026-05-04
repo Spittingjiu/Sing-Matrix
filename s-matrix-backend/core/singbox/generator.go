@@ -34,7 +34,11 @@ type Inbound struct {
 	ListenPort int                    `json:"listen_port"`
 	Users      []User                 `json:"users,omitempty"`
 	TLS        map[string]interface{} `json:"tls,omitempty"`
+	Transport  map[string]interface{} `json:"transport,omitempty"`
 	Masquerade string                 `json:"masquerade,omitempty"`
+	Method     string                 `json:"method,omitempty"`
+	Password   string                 `json:"password,omitempty"`
+	Network    string                 `json:"network,omitempty"`
 }
 
 type User struct {
@@ -98,6 +102,77 @@ func NewHysteria2Inbound(tag string, port int, password string, masquerade strin
 		ListenPort: port,
 		Users:      []User{{Password: password}},
 		Masquerade: masquerade,
+	}
+}
+
+func NewVMessInbound(tag string, port int, uuid string, network string, path string, host string, tls bool, serverName string) Inbound {
+	in := Inbound{
+		Type:       "vmess",
+		Tag:        tag,
+		Listen:     "::",
+		ListenPort: port,
+		Users:      []User{{UUID: uuid}},
+	}
+	if network != "" && network != "tcp" {
+		t := map[string]interface{}{"type": network}
+		if path != "" && path != "/" {
+			t["path"] = path
+		}
+		if host != "" {
+			t["headers"] = map[string]interface{}{"Host": host}
+		}
+		in.Transport = t
+	}
+	if tls {
+		in.TLS = map[string]interface{}{"enabled": true}
+		if serverName != "" {
+			in.TLS["server_name"] = serverName
+		}
+	}
+	return in
+}
+
+func NewTrojanInbound(tag string, port int, password string, serverName string) Inbound {
+	in := Inbound{
+		Type:       "trojan",
+		Tag:        tag,
+		Listen:     "::",
+		ListenPort: port,
+		Users:      []User{{Password: password}},
+		TLS:        map[string]interface{}{"enabled": true},
+	}
+	if serverName != "" {
+		in.TLS["server_name"] = serverName
+	}
+	return in
+}
+
+func NewShadowsocksInbound(tag string, port int, method string, password string) Inbound {
+	return Inbound{
+		Type:       "shadowsocks",
+		Tag:        tag,
+		Listen:     "::",
+		ListenPort: port,
+		Method:     method,
+		Password:   password,
+	}
+}
+
+func NewSocksInbound(tag string, port int) Inbound {
+	return Inbound{
+		Type:       "socks",
+		Tag:        tag,
+		Listen:     "::",
+		ListenPort: port,
+	}
+}
+
+func NewHTTPInbound(tag string, port int) Inbound {
+	return Inbound{
+		Type:       "http",
+		Tag:        tag,
+		Listen:     "::",
+		ListenPort: port,
 	}
 }
 

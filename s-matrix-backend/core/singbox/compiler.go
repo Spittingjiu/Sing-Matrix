@@ -58,6 +58,48 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			in := NewRealityInbound(tagOf(node), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"), str(node.Data, "private_key", ""), str(node.Data, "public_key", ""), firstShortID(node.Data), dest)
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
+		case "inbound-vmess":
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewVMessInbound(tagOf(node), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"),
+				str(node.Data, "network", "tcp"), str(node.Data, "path", "/"), str(node.Data, "host", ""),
+				str(node.Data, "security", "") == "tls", str(node.Data, "sni", str(node.Data, "server_name", "")))
+			cfg.Inbounds = append(cfg.Inbounds, in)
+			inboundTags[node.ID] = in.Tag
+		case "inbound-trojan":
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewTrojanInbound(tagOf(node), port, str(node.Data, "password", "change-me"), str(node.Data, "sni", str(node.Data, "server_name", "")))
+			cfg.Inbounds = append(cfg.Inbounds, in)
+			inboundTags[node.ID] = in.Tag
+		case "inbound-ss", "inbound-shadowsocks":
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewShadowsocksInbound(tagOf(node), port, str(node.Data, "method", "aes-128-gcm"), str(node.Data, "password", "change-me"))
+			cfg.Inbounds = append(cfg.Inbounds, in)
+			inboundTags[node.ID] = in.Tag
+		case "inbound-socks":
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewSocksInbound(tagOf(node), port)
+			cfg.Inbounds = append(cfg.Inbounds, in)
+			inboundTags[node.ID] = in.Tag
+		case "inbound-http":
+			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			if port == 0 {
+				return cfg, fmt.Errorf("no available port for %s", node.ID)
+			}
+			in := NewHTTPInbound(tagOf(node), port)
+			cfg.Inbounds = append(cfg.Inbounds, in)
+			inboundTags[node.ID] = in.Tag
 		case "outbound-direct":
 			if tag := tagOf(node); tag != "direct" {
 				cfg.Outbounds = append(cfg.Outbounds, Outbound{Type: "direct", Tag: tag})
@@ -121,12 +163,31 @@ func nodeKind(node UINode) string {
 		kind = strings.ToLower(strings.TrimSpace(str(node.Data, "kind", "")))
 	}
 	label := strings.ToLower(strings.TrimSpace(node.Label + " " + node.ID + " " + str(node.Data, "label", "") + " " + str(node.Data, "tag", "")))
+	// Known inbound kinds
+	knownInbound := map[string]bool{
+		"inbound-reality": true, "inbound-hy2": true, "inbound-vmess": true,
+		"inbound-trojan": true, "inbound-ss": true, "inbound-shadowsocks": true,
+		"inbound-socks": true, "inbound-http": true,
+	}
+	if knownInbound[kind] {
+		return kind
+	}
 	if kind == "" || kind == "default" || kind == "matrix" || kind == "custom" || kind == "aa" {
 		switch {
 		case strings.Contains(label, "hy2") || strings.Contains(label, "hysteria"):
 			return "inbound-hy2"
 		case strings.Contains(label, "reality") || strings.Contains(label, "vless"):
 			return "inbound-reality"
+		case strings.Contains(label, "vmess"):
+			return "inbound-vmess"
+		case strings.Contains(label, "trojan"):
+			return "inbound-trojan"
+		case strings.Contains(label, "ss") || strings.Contains(label, "shadow"):
+			return "inbound-ss"
+		case strings.Contains(label, "socks"):
+			return "inbound-socks"
+		case strings.Contains(label, "http"):
+			return "inbound-http"
 		case strings.Contains(label, "rule") || strings.Contains(label, "srs"):
 			return "rule-srs"
 		default:

@@ -10,6 +10,7 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"gorm.io/gorm"
 	"s-matrix/core/singbox"
+	"s-matrix/models"
 )
 
 type RouterDeps struct {
@@ -59,6 +60,22 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 		if err := dep.Manager.Restart(); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "config": cfg})
 			return
+		}
+		// Persist inbounds to DB
+		if dep.DB != nil {
+			for _, ib := range cfg.Inbounds {
+				sbType := ib.Type
+				if sbType == "vless" {
+					sbType = "vless"
+				}
+				dep.DB.Where("tag = ?", ib.Tag).Delete(&models.Inbound{})
+				dep.DB.Create(&models.Inbound{
+					Tag:     ib.Tag,
+					Type:    sbType,
+					Port:    ib.ListenPort,
+					Enabled: true,
+				})
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "running": dep.Manager.Status(), "config": cfg})
 	})
