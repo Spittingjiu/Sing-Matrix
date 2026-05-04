@@ -23,10 +23,12 @@ func IsPortAvailable(port int) bool {
 }
 
 func PickAvailablePort(preferred int, used map[int]bool) int {
-	if preferred > 0 && preferred != 443 && !used[preferred] && IsPortAvailable(preferred) {
+	// Trust the preferred port — caller knows the existing ports from current config
+	if preferred > 0 && preferred != 443 && !used[preferred] {
 		used[preferred] = true
 		return preferred
 	}
+	// Scan for a new available port
 	for port := 41000; port <= 60999; port++ {
 		if used[port] {
 			continue
