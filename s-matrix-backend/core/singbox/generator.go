@@ -1,8 +1,10 @@
 package singbox
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
+	"strings"
 )
 
 type Config struct {
@@ -39,7 +41,6 @@ type Inbound struct {
 	Method     string                 `json:"method,omitempty"`
 	Password   string                 `json:"password,omitempty"`
 	Network    string                 `json:"network,omitempty"`
-	Security   string                 `json:"security,omitempty"`
 }
 
 type User struct {
@@ -106,16 +107,13 @@ func NewHysteria2Inbound(tag string, port int, password string, masquerade strin
 	}
 }
 
-func NewVMessInbound(tag string, port int, uuid string, network string, path string, host string, tls bool, serverName string, vmessSecurity string) Inbound {
+func NewVMessInbound(tag string, port int, uuid string, network string, path string, host string, tls bool, serverName string) Inbound {
 	in := Inbound{
 		Type:       "vmess",
 		Tag:        tag,
 		Listen:     "::",
 		ListenPort: port,
 		Users:      []User{{UUID: uuid}},
-	}
-	if vmessSecurity != "" && vmessSecurity != "auto" {
-		in.Security = vmessSecurity
 	}
 	if network != "" && network != "tcp" {
 		t := map[string]interface{}{"type": network}
@@ -152,13 +150,22 @@ func NewTrojanInbound(tag string, port int, password string, serverName string) 
 }
 
 func NewShadowsocksInbound(tag string, port int, method string, password string) Inbound {
+	pwd := password
+	// 2022-blake3 methods require base64-encoded PSK (16 or 32 bytes)
+	if strings.HasPrefix(method, "2022-blake3") {
+		decoded, err := base64.StdEncoding.DecodeString(password)
+		if err != nil || (len(decoded) != 16 && len(decoded) != 32) {
+			// Not a valid PSK — encode the raw password
+			pwd = base64.StdEncoding.EncodeToString([]byte(password))
+		}
+	}
 	return Inbound{
 		Type:       "shadowsocks",
 		Tag:        tag,
 		Listen:     "::",
 		ListenPort: port,
 		Method:     method,
-		Password:   password,
+		Password:   pwd,
 	}
 }
 
