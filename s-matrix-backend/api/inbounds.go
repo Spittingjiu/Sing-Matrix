@@ -79,25 +79,20 @@ func DeleteInboundHandler(db *gorm.DB, manager *singbox.SingboxManager, configPa
 	}
 }
 
-func InboundLinksHandler(configPath string) gin.HandlerFunc {
+func InboundLinksHandler(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		host := c.Request.Host
 		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid id"})
 			return
 		}
-		link, err := BuildSingleInboundLink(configPath, host, uint(id))
-		if err != nil {
-			// Fallback: return ALL links
-			links, err2 := BuildShareLinks(configPath, host)
-			if err2 != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err2.Error()})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"ok": true, "links": links})
+		var inbound models.Inbound
+		if err := db.First(&inbound, id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "inbound not found"})
 			return
 		}
+		host := publicHost(c)
+		link := buildLinkFromRecord(inbound, host)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "links": []string{link}})
 	}
 }

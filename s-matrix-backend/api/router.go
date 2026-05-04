@@ -47,7 +47,7 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 		secured.GET("/inbounds", ListInboundsHandler(dep.DB))
 		secured.POST("/inbounds/:id/toggle", ToggleInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
 		secured.DELETE("/inbounds/:id", DeleteInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
-		secured.GET("/inbounds/:id/links", InboundLinksHandler(dep.ConfigPath))
+		secured.GET("/inbounds/:id/links", InboundLinksHandler(dep.DB))
 	}
 	secured.POST("/singbox/compile", func(c *gin.Context) {
 		var ui singbox.UIData

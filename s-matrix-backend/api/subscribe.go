@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"s-matrix/models"
 )
 
 type runtimeConfig struct {
@@ -357,4 +358,104 @@ func firstUserValue(in map[string]interface{}, key, fallback string) string {
 	}
 	user, _ := users[0].(map[string]interface{})
 	return strMap(user, key, fallback)
+}
+
+// buildLinkFromRecord builds a share link directly from DB inbound record data
+// Avoids config.json index mismatch when DB id != config array index
+func buildLinkFromRecord(ib models.Inbound, host string) string {
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(ib.Payload), &payload); err != nil {
+		payload = map[string]interface{}{}
+	}
+	tag := ib.Tag
+	port := ib.Port
+
+	switch ib.Type {
+	case "vless":
+		uuid := strMap(payload, "uuid", "00000000-0000-0000-0000-000000000000")
+		pubKey := strMap(payload, "public_key", "")
+		shortID := strMap(payload, "short_id", "")
+		sni := strMap(payload, "server_name", "www.cloudflare.com")
+		if sni == "" {
+			sni = strMap(payload, "sni", "www.cloudflare.com")
+		}
+		q := url.Values{}
+		q.Set("security", "reality")
+		q.Set("encryption", "none")
+		q.Set("pbk", pubKey)
+		q.Set("sni", sni)
+		if shortID != "" {
+			q.Set("sid", shortID)
+		}
+		q.Set("spx", "/")
+		q.Set("fp", "chrome")
+		q.Set("type", "tcp")
+		q.Set("flow", "xtls-rprx-vision")
+		return fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuid, host, port, q.Encode(), url.QueryEscape(tag))
+
+	case "hysteria2":
+		pwd := strMap(payload, "password", "change-me")
+		sni := strMap(payload, "server_name", host)
+		q := url.Values{}
+		q.Set("sni", sni)
+		q.Set("insecure", "1")
+		return fmt.Sprintf("hy2://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
+
+	case "vmess":
+		uuid := strMap(payload, "uuid", "00000000-0000-0000-0000-000000000000")
+		netType := strMap(payload, "network", "tcp")
+		path := strMap(payload, "path", "")
+		rHost := strMap(payload, "host", "")
+		security := strMap(payload, "security", "")
+		sni := strMap(payload, "server_name", "")
+		if sni == "" {
+			sni = strMap(payload, "sni", "")
+		}
+		vmessCfg := map[string]interface{}{
+			"v": "2", "ps": tag, "add": host, "port": port, "id": uuid, "aid": 0,
+			"net": netType, "type": "none", "tls": "none",
+		}
+		if netType == "ws" {
+			if path != "" {
+				vmessCfg["path"] = path
+			}
+			if rHost != "" {
+				vmessCfg["host"] = rHost
+			}
+		}
+		if security == "tls" {
+			vmessCfg["tls"] = "tls"
+			if sni != "" {
+				vmessCfg["sni"] = sni
+			}
+		}
+		b, _ := json.Marshal(vmessCfg)
+		return fmt.Sprintf("vmess://%s", base64.StdEncoding.EncodeToString(b))
+
+	case "trojan":
+		pwd := strMap(payload, "password", "change-me")
+		sni := strMap(payload, "sni", host)
+		if sni == "" {
+			sni = strMap(payload, "server_name", host)
+		}
+		q := url.Values{}
+		q.Set("sni", sni)
+		return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
+
+	case "shadowsocks":
+		method := strMap(payload, "method", "aes-128-gcm")
+		pwd := strMap(payload, "password", "change-me")
+		raw := fmt.Sprintf("%s:%s@%s:%d", method, pwd, host, port)
+		b64 := base64.StdEncoding.EncodeToString([]byte(raw))
+		return fmt.Sprintf("ss://%s#%s", b64, url.QueryEscape(tag))
+
+	case "socks":
+		return fmt.Sprintf("socks5://%s:%d#%s", host, port, url.QueryEscape(tag))
+
+	case "http":
+		return fmt.Sprintf("http://%s:%d#%s", host, port, url.QueryEscape(tag))
+
+	default:
+		return fmt.Sprintf("ss://%s@%s:%d#%s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("aes-128-gcm:change-me@%s:%d", host, port))), host, port, url.QueryEscape(tag))
+	}
 }
