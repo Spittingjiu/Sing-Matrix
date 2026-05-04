@@ -48,11 +48,27 @@ func DiscoveryHandler(configPath string) gin.HandlerFunc {
 			return
 		}
 		types := []string{}
+		seen := map[string]bool{}
 		for _, link := range links {
+			proto := ""
 			if strings.HasPrefix(link, "vless://") {
-				types = append(types, "vless-reality")
+				proto = "vless-reality"
 			} else if strings.HasPrefix(link, "hy2://") || strings.HasPrefix(link, "hysteria2://") {
-				types = append(types, "hysteria2")
+				proto = "hysteria2"
+			} else if strings.HasPrefix(link, "vmess://") {
+				proto = "vmess"
+			} else if strings.HasPrefix(link, "trojan://") {
+				proto = "trojan"
+			} else if strings.HasPrefix(link, "ss://") {
+				proto = "shadowsocks"
+			} else if strings.HasPrefix(link, "socks5://") {
+				proto = "socks"
+			} else if strings.HasPrefix(link, "http://") {
+				proto = "http"
+			}
+			if proto != "" && !seen[proto] {
+				types = append(types, proto)
+				seen[proto] = true
 			}
 		}
 		c.JSON(http.StatusOK, gin.H{
@@ -84,42 +100,157 @@ func BuildShareLinks(configPath, host string) ([]string, error) {
 		port := intMap(in, "listen_port", 0)
 		switch typ {
 		case "vless":
-			uuid := firstUserValue(in, "uuid", "00000000-0000-0000-0000-000000000000")
-			tls, _ := in["tls"].(map[string]interface{})
-			reality, _ := tls["reality"].(map[string]interface{})
-			meta := loadClientInboundMeta(configPath, tag)
-			pbk := meta["public_key"]
-			if pbk == "" {
-				pbk = strMap(reality, "public_key", "")
-			}
-			sid := meta["short_id"]
-			if sid == "" {
-				sid = firstStringValue(reality, "short_id", "")
-			}
-			sni := strMap(tls, "server_name", "www.cloudflare.com")
-			q := url.Values{}
-			q.Set("security", "reality")
-			q.Set("encryption", "none")
-			q.Set("pbk", pbk)
-			q.Set("sni", sni)
-			if sid != "" {
-				q.Set("sid", sid)
-			}
-			q.Set("spx", "/")
-			q.Set("fp", "chrome")
-			q.Set("type", "tcp")
-			q.Set("flow", "xtls-rprx-vision")
-			links = append(links, fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuid, host, port, q.Encode(), url.QueryEscape(tag)))
+			link := buildVLESSLink(in, host, port, tag, configPath)
+			if link != "" { links = append(links, link) }
 		case "hysteria2":
-			password := firstUserValue(in, "password", "change-me")
-			sni := strMap(in, "server_name", host)
-			q := url.Values{}
-			q.Set("sni", sni)
-			q.Set("insecure", "1")
-			links = append(links, fmt.Sprintf("hy2://%s@%s:%d?%s#%s", url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag)))
+			link := buildHY2Link(in, host, port, tag)
+			if link != "" { links = append(links, link) }
+		case "vmess":
+			link := buildVMessLink(in, host, port, tag)
+			if link != "" { links = append(links, link) }
+		case "trojan":
+			link := buildTrojanLink(in, host, port, tag)
+			if link != "" { links = append(links, link) }
+		case "shadowsocks":
+			link := buildSSLink(in, host, port, tag)
+			if link != "" { links = append(links, link) }
+		case "socks":
+			links = append(links, fmt.Sprintf("socks5://%s:%d#%s", host, port, url.QueryEscape(tag)))
+		case "http":
+			links = append(links, fmt.Sprintf("http://%s:%d#%s", host, port, url.QueryEscape(tag)))
 		}
 	}
 	return links, nil
+}
+
+func buildVLESSLink(in map[string]interface{}, host string, port int, tag, configPath string) string {
+	uuid := firstUserValue(in, "uuid", "00000000-0000-0000-0000-000000000000")
+	tls, _ := in["tls"].(map[string]interface{})
+	reality, _ := tls["reality"].(map[string]interface{})
+	meta := loadClientInboundMeta(configPath, tag)
+	pbk := meta["public_key"]
+	if pbk == "" {
+		pbk = strMap(reality, "public_key", "")
+	}
+	sid := meta["short_id"]
+	if sid == "" {
+		sid = firstStringValue(reality, "short_id", "")
+	}
+	sni := strMap(tls, "server_name", "www.cloudflare.com")
+	q := url.Values{}
+	q.Set("security", "reality")
+	q.Set("encryption", "none")
+	q.Set("pbk", pbk)
+	q.Set("sni", sni)
+	if sid != "" { q.Set("sid", sid) }
+	q.Set("spx", "/")
+	q.Set("fp", "chrome")
+	q.Set("type", "tcp")
+	q.Set("flow", "xtls-rprx-vision")
+	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuid, host, port, q.Encode(), url.QueryEscape(tag))
+}
+
+func buildHY2Link(in map[string]interface{}, host string, port int, tag string) string {
+	password := firstUserValue(in, "password", "change-me")
+	sni := strMap(in, "server_name", host)
+	q := url.Values{}
+	q.Set("sni", sni)
+	q.Set("insecure", "1")
+	return fmt.Sprintf("hy2://%s@%s:%d?%s#%s", url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag))
+}
+
+func buildVMessLink(in map[string]interface{}, host string, port int, tag string) string {
+	uuid := firstUserValue(in, "uuid", "00000000-0000-0000-0000-000000000000")
+	transport, _ := in["transport"].(map[string]interface{})
+	tls, _ := in["tls"].(map[string]interface{})
+	netType := strMap(transport, "type", "tcp")
+	path := strMap(transport, "path", "")
+	headers, _ := transport["headers"].(map[string]interface{})
+	rHost := strMap(headers, "Host", "")
+	tlsEnabled := false
+	sni := ""
+	if tls != nil {
+		if en, _ := tls["enabled"].(bool); en {
+			tlsEnabled = true
+			sni = strMap(tls, "server_name", "")
+		}
+	}
+	vmessCfg := map[string]interface{}{
+		"v": "2", "ps": tag, "add": host, "port": port, "id": uuid, "aid": 0,
+		"net": netType, "type": "none", "tls": "none",
+	}
+	if netType == "ws" {
+		if path != "" { vmessCfg["path"] = path }
+		if rHost != "" { vmessCfg["host"] = rHost }
+	}
+	if tlsEnabled {
+		vmessCfg["tls"] = "tls"
+		if sni != "" { vmessCfg["sni"] = sni }
+	}
+	b, _ := json.Marshal(vmessCfg)
+	return fmt.Sprintf("vmess://%s", base64.StdEncoding.EncodeToString(b))
+}
+
+func buildTrojanLink(in map[string]interface{}, host string, port int, tag string) string {
+	password := firstUserValue(in, "password", "change-me")
+	tls, _ := in["tls"].(map[string]interface{})
+	sni := strMap(tls, "server_name", host)
+	q := url.Values{}
+	q.Set("sni", sni)
+	return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag))
+}
+
+func buildSSLink(in map[string]interface{}, host string, port int, tag string) string {
+	method := strMap(in, "method", "aes-128-gcm")
+	password := strMap(in, "password", firstUserValue(in, "password", "change-me"))
+	raw := fmt.Sprintf("%s:%s@%s:%d", method, password, host, port)
+	b64 := base64.StdEncoding.EncodeToString([]byte(raw))
+	return fmt.Sprintf("ss://%s#%s", b64, url.QueryEscape(tag))
+}
+
+func BuildSingleInboundLink(configPath, host string, id uint) (string, error) {
+	// Load DB to find tag, then config to find the inbound
+	// For simplicity, rebuild from config
+	links, err := BuildShareLinks(configPath, host)
+	if err != nil {
+		return "", err
+	}
+	// Get tag from DB
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot read config: %w", err)
+	}
+	var cfg runtimeConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return "", err
+	}
+	for _, in := range cfg.Inbounds {
+		typ := strMap(in, "type", "")
+		tag := strMap(in, "tag", "")
+		port := intMap(in, "listen_port", 0)
+		var link string
+		switch typ {
+		case "vless":
+			link = buildVLESSLink(in, host, port, tag, configPath)
+		case "hysteria2":
+			link = buildHY2Link(in, host, port, tag)
+		case "vmess":
+			link = buildVMessLink(in, host, port, tag)
+		case "trojan":
+			link = buildTrojanLink(in, host, port, tag)
+		case "shadowsocks":
+			link = buildSSLink(in, host, port, tag)
+		case "socks":
+			link = fmt.Sprintf("socks5://%s:%d#%s", host, port, url.QueryEscape(tag))
+		case "http":
+			link = fmt.Sprintf("http://%s:%d#%s", host, port, url.QueryEscape(tag))
+		}
+		if link != "" {
+			return link, nil
+		}
+		_ = links
+	}
+	return "", fmt.Errorf("no inbound found in config")
 }
 
 func publicHost(c *gin.Context) string {

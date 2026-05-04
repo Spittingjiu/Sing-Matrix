@@ -82,12 +82,23 @@ func DeleteInboundHandler(db *gorm.DB, manager *singbox.SingboxManager, configPa
 func InboundLinksHandler(configPath string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		host := c.Request.Host
-		links, err := BuildShareLinks(configPath, host)
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid id"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "links": links})
+		link, err := BuildSingleInboundLink(configPath, host, uint(id))
+		if err != nil {
+			// Fallback: return ALL links
+			links, err2 := BuildShareLinks(configPath, host)
+			if err2 != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err2.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"ok": true, "links": links})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "links": []string{link}})
 	}
 }
 
