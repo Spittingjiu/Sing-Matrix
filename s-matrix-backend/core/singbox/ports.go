@@ -2,6 +2,7 @@ package singbox
 
 import (
 	"fmt"
+	"math/rand"
 	"net"
 )
 
@@ -28,8 +29,10 @@ func PickAvailablePort(preferred int, used map[int]bool) int {
 		used[preferred] = true
 		return preferred
 	}
-	// Scan for a new available port
-	for port := 41000; port <= 60999; port++ {
+	// Random scan in range 10000-60000, skip occupied ports
+	start := 10000 + rand.Intn(50001)
+	for offset := 0; offset <= 50000; offset++ {
+		port := 10000 + (start-10000+offset)%50001
 		if used[port] {
 			continue
 		}
