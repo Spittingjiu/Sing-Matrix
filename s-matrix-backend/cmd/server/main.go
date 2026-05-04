@@ -31,7 +31,7 @@ func main() {
 			log.Printf("sing-box auto-started with %s", configPath)
 		}
 	}
-	if err := api.NewRouter(staticFiles, api.RouterDeps{Manager: manager, ConfigPath: configPath, LogPath: logPath, DB: db}).Run(addr); err != nil {
+	if err := api.NewRouter(api.RouterDeps{Manager: manager, ConfigPath: configPath, LogPath: logPath, DB: db}).Run(addr); err != nil {
 		log.Fatal(err)
 	}
 }

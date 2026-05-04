@@ -11,8 +11,8 @@
 
 ## 技术栈
 
-- 后端：Go 1.21+、Gin、SQLite、WebSocket
-- 前端：Vue 3、Vite、TypeScript、Naive UI、Tailwind CSS、Vue Flow、ECharts
+- Go 1.21+、Gin、SQLite、WebSocket
+- Go `embed` + `html/template` 内置 Web UI（无 Node/Vue/Vite 运行或构建依赖）
 - 目标运行：Linux 单节点面板，直接编排本机 sing-box 进程与配置
 
 ## 当前实现状态
@@ -27,38 +27,34 @@
 - 拓扑图编译接口
 - sing-box reload/restart 接口骨架
 - WebSocket 流量推送接口
-- Vue 3 前端工作台
-- Vue Flow 拓扑画布
-- Naive UI 暗黑风仪表盘
+- Go 内置原生 Web UI
+- 列表式节点管理工作台
+- 无 Node/Vite 前端构建链路
 - API 客户端封装
 - Dockerfile、docker-compose、systemd unit 示例
 
 ## 目录结构
 
-- `backend/`：Go API 服务与 sing-box 编排逻辑
-- `frontend/`：Vue 3 + Vite 前端
+- `s-matrix-backend/`：Go API 服务、sing-box 编排逻辑与内置 Web UI
+- `s-matrix-backend/api/web/`：Go embed 的原生 HTML/CSS/JS 页面资源
+- `scripts/`：构建产物与 systemd 示例
 - `deploy/`：systemd、Nginx、Docker Compose 示例
 - `docs/`：产品设计、API 与部署说明
 
 ## 快速开始
 
-### 后端
+### Go-only 构建/运行
 
-进入 `backend` 后执行：
+进入 `s-matrix-backend` 后执行：
 
 - `go mod tidy`
-- `go run ./cmd/smatrix`
+- `go run ./cmd/server`
 
-默认监听：`127.0.0.1:18088`
+默认监听：`127.0.0.1:19088`。Web UI、API 与静态资源都由同一个 Go 进程提供。
 
-### 前端
+发布构建：
 
-进入 `frontend` 后执行：
-
-- `npm install`
-- `npm run dev`
-
-默认开发入口：`http://127.0.0.1:5173`
+- `./scripts/build-release.sh`
 
 ## API 摘要
 
