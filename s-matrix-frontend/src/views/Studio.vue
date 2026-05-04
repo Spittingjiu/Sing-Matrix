@@ -109,54 +109,62 @@ function openAdd() {
   fDest.value = 'www.microsoft.com:443'; fPrivKey.value = ''; fPubKey.value = ''; fShortID.value = ''
   showModal.value = true
 }
+function dbTypeToProtocol(dbType: string): string {
+  const m: Record<string,string> = { vless: 'reality', hysteria2: 'hy2', vmess: 'vmess', trojan: 'trojan', shadowsocks: 'ss', socks: 'socks', http: 'http' }
+  return m[dbType] || 'reality'
+}
 function openEdit(ib: InboundRow) {
   editId.value = ib.id; fRemark.value = ib.tag; fPort.value = ib.port
-  fProtocol.value = ib.type === 'hysteria2' ? 'hy2' : 'reality'
+  fProtocol.value = dbTypeToProtocol(ib.type)
+  // Parse payload to restore fields
+  try {
+    const p = JSON.parse(ib.payload || '{}')
+    if (p.uuid) fUUID.value = p.uuid
+    if (p.password) fPassword.value = p.password
+    if (p.method) fMethod.value = p.method
+    if (p.dest) fDest.value = p.dest
+    if (p.server_name) fSNI.value = p.server_name
+    else if (p.sni) fSNI.value = p.sni
+    if (p.private_key) fPrivKey.value = p.private_key
+    if (p.public_key) fPubKey.value = p.public_key
+    if (p.short_id) fShortID.value = p.short_id
+    if (p.network) fNetwork.value = p.network
+    if (p.path) fPath.value = p.path
+    if (p.host) fHost.value = p.host
+    if (p.security) fSecurity.value = p.security
+  } catch {}
   showModal.value = true
 }
 async function submitEdit() {
   try {
     const remark = fRemark.value.trim(); if (!remark) return
-    if (editId.value) {
-      const ib = inbounds.value.find(i => i.id === editId.value); if (!ib) return
-      await apiFetch('/api/v1/inbounds/rename', { method: 'PUT', body: JSON.stringify({ tag: ib.tag, new_tag: remark }) })
+    const port = fPort.value || 0
+    const tag = remark
+    let kind = 'inbound-reality'
+    const data: Record<string,any> = { tag, port }
+    if (fProtocol.value === 'hy2') {
+      kind = 'inbound-hy2'; data.password = fPassword.value || randomHex(16)
+    } else if (fProtocol.value === 'vmess') {
+      kind = 'inbound-vmess'; data.uuid = fUUID.value || crypto.randomUUID?.() || '00000000-0000-0000-0000-000000000000'
+      data.network = fNetwork.value; data.path = fPath.value; data.host = fHost.value
+      if (fSecurity.value === 'tls') { data.security = 'tls'; data.sni = fSNI.value }
+    } else if (fProtocol.value === 'trojan') {
+      kind = 'inbound-trojan'; data.password = fPassword.value || randomHex(16); data.sni = fSNI.value
+    } else if (fProtocol.value === 'ss') {
+      kind = 'inbound-ss'; data.method = fMethod.value; data.password = fPassword.value || randomHex(16)
+    } else if (fProtocol.value === 'socks') {
+      kind = 'inbound-socks'
+    } else if (fProtocol.value === 'http') {
+      kind = 'inbound-http'
     } else {
-      // Add new node
-      const port = fPort.value || 0
-      const remark2 = remark || `${protocolLabel(fProtocol.value)} :${port || 'auto'}`
-      let kind = 'inbound-reality'
-      const data: Record<string,any> = { tag: remark2, port }
-      if (fProtocol.value === 'hy2') {
-        kind = 'inbound-hy2'
-        data.password = fPassword.value || randomHex(16)
-      } else if (fProtocol.value === 'vmess') {
-        kind = 'inbound-vmess'
-        data.uuid = fUUID.value || crypto.randomUUID?.() || '00000000-0000-0000-0000-000000000000'
-        data.network = fNetwork.value; data.path = fPath.value; data.host = fHost.value
-        if (fSecurity.value === 'tls') { data.security = 'tls'; data.sni = fSNI.value }
-      } else if (fProtocol.value === 'trojan') {
-        kind = 'inbound-trojan'
-        data.password = fPassword.value || randomHex(16); data.sni = fSNI.value
-      } else if (fProtocol.value === 'ss') {
-        kind = 'inbound-ss'
-        data.method = fMethod.value; data.password = fPassword.value || randomHex(16)
-      } else if (fProtocol.value === 'socks') {
-        kind = 'inbound-socks'
-      } else if (fProtocol.value === 'http') {
-        kind = 'inbound-http'
-      } else {
-        // reality
-        data.uuid = fUUID.value || crypto.randomUUID?.() || '00000000-0000-0000-0000-000000000000'
-        data.dest = fDest.value; data.server_name = fSNI.value
-        data.private_key = fPrivKey.value; data.public_key = fPubKey.value; data.short_id = fShortID.value
-      }
-      const topo = {
-        nodes: [{ id: 'new-in', kind, label: remark2, data }],
-        edges: []
-      }
-      const r = await apiFetch('/api/v1/singbox/compile', { method: 'POST', body: JSON.stringify(topo) })
-      if (!r.ok) throw new Error(await r.text())
+      kind = 'inbound-reality'; data.uuid = fUUID.value || crypto.randomUUID?.() || '00000000-0000-0000-0000-000000000000'
+      data.dest = fDest.value; data.server_name = fSNI.value
+      data.private_key = fPrivKey.value; data.public_key = fPubKey.value; data.short_id = fShortID.value
     }
+    // Always rebuild via compile (handles both add and edit)
+    const topo = { nodes: [{ id: editId.value ? 'edit-in' : 'new-in', kind, label: tag, data }], edges: [] }
+    const r = await apiFetch('/api/v1/singbox/compile', { method: 'POST', body: JSON.stringify(topo) })
+    if (!r.ok) throw new Error(await r.text())
     showModal.value = false; await loadInbounds()
     successText.value = editId.value ? '节点已更新' : '节点已创建'; setTimeout(() => successText.value = '', 3000)
   } catch (err) { errorText.value = String(err) }

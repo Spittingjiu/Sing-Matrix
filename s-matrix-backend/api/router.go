@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"io/fs"
 	"net/http"
 	"time"
@@ -64,16 +65,38 @@ func NewRouter(staticFS fs.FS, deps ...RouterDeps) *gin.Engine {
 		// Persist inbounds to DB
 		if dep.DB != nil {
 			for _, ib := range cfg.Inbounds {
-				sbType := ib.Type
-				if sbType == "vless" {
-					sbType = "vless"
-				}
 				dep.DB.Where("tag = ?", ib.Tag).Delete(&models.Inbound{})
+				payload := map[string]interface{}{}
+				if ib.TLS != nil {
+					if sn, ok := ib.TLS["server_name"].(string); ok { payload["server_name"] = sn }
+					if r, ok := ib.TLS["reality"].(map[string]interface{}); ok {
+						if pk, ok := r["private_key"].(string); ok { payload["private_key"] = pk }
+						if sids, ok := r["short_id"].([]string); ok && len(sids) > 0 { payload["short_id"] = sids[0] }
+					}
+				}
+				if ib.Transport != nil {
+					if n, ok := ib.Transport["type"].(string); ok { payload["network"] = n }
+					if p, ok := ib.Transport["path"].(string); ok { payload["path"] = p }
+					if h, ok := ib.Transport["headers"].(map[string]interface{}); ok {
+						if host, ok := h["Host"].(string); ok { payload["host"] = host }
+					}
+				}
+				if ib.TLS != nil {
+					if _, ok := ib.TLS["enabled"]; ok && ib.TLS["reality"] == nil { payload["security"] = "tls" }
+				}
+				for _, u := range ib.Users {
+					if u.UUID != "" { payload["uuid"] = u.UUID }
+					if u.Password != "" { payload["password"] = u.Password }
+				}
+				if ib.Method != "" { payload["method"] = ib.Method }
+				if ib.Password != "" && payload["password"] == nil { payload["password"] = ib.Password }
+				payloadBytes, _ := json.Marshal(payload)
 				dep.DB.Create(&models.Inbound{
 					Tag:     ib.Tag,
-					Type:    sbType,
+					Type:    ib.Type,
 					Port:    ib.ListenPort,
 					Enabled: true,
+					Payload: string(payloadBytes),
 				})
 			}
 		}
