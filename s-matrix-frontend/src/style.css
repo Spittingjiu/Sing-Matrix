@@ -37,3 +37,18 @@ body { margin: 0; }
 .suigo-oneclick { border-width: 1px; border-style: solid; border-radius: 26px; padding: 22px; box-shadow: 0 18px 45px rgba(15,23,42,.08); transition: all .22s ease; }
 .suigo-oneclick:hover { transform: translateY(-2px); box-shadow: 0 24px 70px rgba(15,23,42,.13); }
 .suigo-oneclick:disabled { opacity: .55; cursor: wait; transform: none; }
+
+/* Sidebar layout */
+.suigo-layout { display: flex; min-height: 100vh; }
+.suigo-sidebar { width: 250px; min-width: 250px; background: rgba(255,255,255,.92); border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; padding: 24px 16px; gap: 6px; backdrop-filter: blur(18px); position: sticky; top: 0; height: 100vh; overflow-y: auto; z-index: 30; }
+.suigo-sidebar-logo { display: flex; align-items: center; gap: 10px; padding: 0 4px 20px; margin-bottom: 10px; border-bottom: 1px solid #e2e8f0; }
+.suigo-sidebar-logo img { width: 36px; height: 36px; border-radius: 10px; }
+.suigo-sidebar-logo h1 { font-size: 17px; font-weight: 900; letter-spacing: -.02em; }
+.suigo-sidebar-logo span { font-size: 11px; color: #64748b; display: block; }
+.suigo-nav-btn { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: none; border-radius: 14px; background: transparent; padding: 11px 14px; font-size: 14px; font-weight: 700; color: #475569; cursor: pointer; transition: all .15s ease; }
+.suigo-nav-btn:hover { background: #f1f5f9; color: #0f172a; }
+.suigo-nav-btn.active { background: #0f172a; color: white; box-shadow: 0 4px 16px rgba(15,23,42,.18); }
+.suigo-nav-icon { font-size: 18px; width: 24px; text-align: center; flex-shrink: 0; }
+.suigo-sidebar-spacer { flex: 1; }
+.suigo-sidebar-bottom { border-top: 1px solid #e2e8f0; padding-top: 12px; display: flex; flex-direction: column; gap: 4px; }
+.suigo-content { flex: 1; min-width: 0; padding: 28px 32px; max-width: 1000px; }

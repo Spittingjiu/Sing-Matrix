@@ -131,98 +131,152 @@ async function oneClick(kind: 'reality' | 'hy2') {
 </script>
 
 <template>
-  <main :class="flashActive ? 'matrix-flash' : ''" class="suigo-shell min-h-screen text-slate-900">
-    <header class="sticky top-0 z-40 border-b border-slate-200/80 bg-white/85 backdrop-blur-xl">
-      <div class="mx-auto flex max-w-7xl items-center justify-between px-5 py-4">
-        <div class="flex items-center gap-3"><img src="/favicon.svg" class="h-10 w-10 rounded-xl shadow-sm" /><div><div class="text-lg font-black tracking-tight">S-Matrix</div><div class="text-xs text-slate-500">Sing-box 可视化编排控制台</div></div></div>
-        <div class="flex items-center gap-2">
-          <button class="suigo-pill" :class="activeTab==='nodes'?'border-emerald-400 text-emerald-700':''" @click="activeTab='nodes'">节点列表</button>
-          <button class="suigo-pill" :class="activeTab==='terminal'?'border-emerald-400 text-emerald-700':''" @click="activeTab='terminal'">全息终端</button>
-          <button class="suigo-pill" @click="toggleLocale()">{{ locale === 'zh' ? 'EN' : '中文' }}</button>
-          <button class="suigo-pill text-red-600" @click="clearToken(); router.replace('/login')">{{ t('logout') }}</button>
-        </div>
-      </div>
-    </header>
-
-    <section class="mx-auto max-w-7xl px-5 py-6">
-      <div v-show="activeTab === 'nodes'" class="space-y-5">
-        <div v-if="successText" class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">{{ successText }}</div>
-        <div v-if="errorText" class="rounded-2xl border border-red-200 bg-red-50 p-4"><div class="mb-2 text-sm font-bold text-red-700">SING-BOX EXCEPTION</div><pre class="max-h-40 overflow-auto whitespace-pre-wrap text-xs text-red-700">{{ errorText }}</pre></div>
-
-        <section class="grid gap-4 md:grid-cols-2">
-          <button :disabled="deploying" class="suigo-oneclick border-emerald-200 bg-emerald-50 text-left hover:border-emerald-400" @click="oneClick('reality')">
-            <div class="text-xs font-black uppercase tracking-[0.28em] text-emerald-600">ONE CLICK</div>
-            <div class="mt-2 text-2xl font-black text-slate-950">一键 REALITY</div>
-            <div class="mt-1 text-sm text-slate-500">自动端口、UUID、REALITY Key、短 ID，部署后直接给客户端链接。</div>
-          </button>
-          <button :disabled="deploying" class="suigo-oneclick border-cyan-200 bg-cyan-50 text-left hover:border-cyan-400" @click="oneClick('hy2')">
-            <div class="text-xs font-black uppercase tracking-[0.28em] text-cyan-600">ONE CLICK</div>
-            <div class="mt-2 text-2xl font-black text-slate-950">一键 HY2</div>
-            <div class="mt-1 text-sm text-slate-500">自动端口、随机密码、伪装地址，部署后直接给订阅和二维码。</div>
-          </button>
-        </section>
-
-        <div class="flex flex-wrap items-center gap-3">
-          <button class="suigo-primary" @click="initializeMatrix">{{ t('initializeMatrix') }}</button>
-          <button :disabled="deploying" :class="deployButtonClass" class="suigo-secondary" @click="deployTopology">{{ deploying ? t('deploying') : t('deployMatrix') }}</button>
-          <button class="suigo-secondary" @click="loadShareLinks">{{ t('clientLinks') }}</button>
-          <button class="suigo-secondary" @click="copyText(subscriptionUrl, t('copied'))">{{ t('subscription') }}</button>
-          <span v-if="copied" class="text-sm font-bold text-emerald-600">{{ copied }}</span>
+  <main :class="flashActive ? 'matrix-flash' : ''" class="suigo-shell">
+    <div class="suigo-layout">
+      <!-- Sidebar -->
+      <aside class="suigo-sidebar">
+        <div class="suigo-sidebar-logo">
+          <img src="/favicon.svg" />
+          <div>
+            <h1>S-Matrix</h1>
+            <span>Sing-box 编排控制台</span>
+          </div>
         </div>
 
-        <section class="suigo-card">
-          <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-            <div><h1 class="text-xl font-black">节点列表</h1><p class="text-sm text-slate-500">添加入站、规则、出站节点，一键编译下发。</p></div>
-            <button class="suigo-primary !px-4 !py-2 text-sm" @click="suggestPort(); addMenu = !addMenu">+ 添加节点</button>
+        <button class="suigo-nav-btn" :class="{ active: activeTab === 'nodes' }" @click="activeTab = 'nodes'">
+          <span class="suigo-nav-icon">⚡</span> 节点管理
+        </button>
+        <button class="suigo-nav-btn" :class="{ active: activeTab === 'terminal' }" @click="activeTab = 'terminal'">
+          <span class="suigo-nav-icon">💻</span> 全息终端
+        </button>
+
+        <div style="padding: 16px 4px 12px; margin-top: 8px;">
+          <div class="text-xs font-black uppercase tracking-[.2em] text-slate-400" style="padding-left: 10px; margin-bottom: 8px;">快捷操作</div>
+          <button :disabled="deploying" class="suigo-nav-btn" style="color: #059669;" @click="oneClick('reality')">
+            <span class="suigo-nav-icon">🔑</span> 一键 REALITY
+          </button>
+          <button :disabled="deploying" class="suigo-nav-btn" style="color: #0891b2;" @click="oneClick('hy2')">
+            <span class="suigo-nav-icon">⚡</span> 一键 HY2
+          </button>
+          <button class="suigo-nav-btn" @click="initializeMatrix">
+            <span class="suigo-nav-icon">🚀</span> {{ t('initializeMatrix') }}
+          </button>
+        </div>
+
+        <div class="suigo-sidebar-spacer"></div>
+
+        <div class="suigo-sidebar-bottom">
+          <button class="suigo-nav-btn" @click="toggleLocale()">
+            <span class="suigo-nav-icon">🌐</span> {{ locale === 'zh' ? 'Switch to EN' : '切换到中文' }}
+          </button>
+          <button class="suigo-nav-btn" style="color: #dc2626;" @click="clearToken(); router.replace('/login')">
+            <span class="suigo-nav-icon">🚪</span> {{ t('logout') }}
+          </button>
+        </div>
+      </aside>
+
+      <!-- Main Content -->
+      <div class="suigo-content">
+        <div v-show="activeTab === 'nodes'" class="space-y-5">
+          <!-- Status messages -->
+          <div v-if="successText" class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">{{ successText }}</div>
+          <div v-if="errorText" class="rounded-2xl border border-red-200 bg-red-50 p-4">
+            <div class="mb-2 text-sm font-bold text-red-700">SING-BOX EXCEPTION</div>
+            <pre class="max-h-40 overflow-auto whitespace-pre-wrap text-xs text-red-700">{{ errorText }}</pre>
           </div>
 
-          <div v-if="addMenu" class="border-b border-slate-100 bg-slate-50/60 p-5">
-            <div class="mb-4 grid gap-4 md:grid-cols-3">
-              <div class="rounded-2xl border border-slate-200 bg-white p-4">
-                <div class="mb-2 text-sm font-black text-emerald-700">入站节点</div>
-                <select v-model="inboundType" class="suigo-input mb-2 w-full"><option value="hy2">Hysteria2</option><option value="reality">VLESS REALITY</option></select>
-                <div class="mb-2 text-xs text-slate-500">建议端口: {{ portSuggestion || '—' }}</div>
-                <button class="suigo-secondary w-full text-sm" @click="addInbound">添加入站</button>
+          <!-- Toolbar -->
+          <div class="flex flex-wrap items-center gap-3">
+            <button :disabled="deploying" :class="deployButtonClass" class="suigo-primary text-sm" @click="deployTopology">
+              {{ deploying ? t('deploying') : t('deployMatrix') }}
+            </button>
+            <button class="suigo-secondary text-sm" @click="loadShareLinks">{{ t('clientLinks') }}</button>
+            <button class="suigo-secondary text-sm" @click="copyText(subscriptionUrl, t('copied'))">{{ t('subscription') }}</button>
+            <span v-if="copied" class="text-sm font-bold text-emerald-600">{{ copied }}</span>
+          </div>
+
+          <!-- Node List Card -->
+          <section class="suigo-card">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+              <div>
+                <h2 class="text-lg font-black">节点列表</h2>
+                <p class="text-sm text-slate-500">添加入站、规则、出站节点，一键编译下发</p>
               </div>
-              <div class="rounded-2xl border border-slate-200 bg-white p-4">
-                <div class="mb-2 text-sm font-black text-violet-700">SRS 规则</div>
-                <input v-model="ruleTag" class="suigo-input mb-2 w-full" placeholder="Tag (如 youtube)" />
-                <input v-model="ruleUrl" class="suigo-input mb-2 w-full" placeholder="SRS URL (可选)" />
-                <button class="suigo-secondary w-full text-sm" @click="addRule">添加规则</button>
-              </div>
-              <div class="rounded-2xl border border-slate-200 bg-white p-4">
-                <div class="mb-2 text-sm font-black text-amber-700">出站节点</div>
-                <input v-model="outTag" class="suigo-input mb-2 w-full" placeholder="Tag (如 direct)" />
-                <button class="suigo-secondary w-full text-sm" @click="addOutbound">添加出站</button>
-              </div>
+              <button class="suigo-primary !px-4 !py-2 text-sm" @click="suggestPort(); addMenu = !addMenu">+ 添加节点</button>
             </div>
-          </div>
 
-          <div v-if="nodes.length === 0" class="p-10 text-center text-slate-400">暂无节点。点击「+ 添加节点」或使用左侧蓝图向导快速开始。</div>
-
-          <div v-else class="divide-y divide-slate-100">
-            <div v-for="node in nodes" :key="node.id" class="flex items-center justify-between gap-4 px-5 py-4 transition hover:bg-slate-50/60">
-              <div class="flex items-center gap-3">
-                <span class="rounded-full border px-2.5 py-1 text-xs font-bold" :class="kindBadge(node.kind)">{{ kindLabel(node.kind) }}</span>
-                <div>
-                  <div class="text-sm font-bold text-slate-900">{{ node.label }}</div>
-                  <div class="text-xs text-slate-500">tag: {{ node.tag }}{{ node.port ? ` · port: ${node.port}` : '' }}</div>
+            <!-- Add Node Panel -->
+            <div v-if="addMenu" class="border-b border-slate-100 bg-slate-50/60 p-5">
+              <div class="mb-4 grid gap-4 md:grid-cols-3">
+                <div class="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div class="mb-2 text-sm font-black text-emerald-700">入站节点</div>
+                  <select v-model="inboundType" class="suigo-input mb-2 w-full">
+                    <option value="hy2">Hysteria2</option>
+                    <option value="reality">VLESS REALITY</option>
+                  </select>
+                  <div class="mb-2 text-xs text-slate-500">建议端口: {{ portSuggestion || '—' }}</div>
+                  <button class="suigo-secondary w-full text-sm" @click="addInbound">添加入站</button>
+                </div>
+                <div class="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div class="mb-2 text-sm font-black text-violet-700">SRS 规则</div>
+                  <input v-model="ruleTag" class="suigo-input mb-2 w-full" placeholder="Tag (如 youtube)" />
+                  <input v-model="ruleUrl" class="suigo-input mb-2 w-full" placeholder="SRS URL (可选)" />
+                  <button class="suigo-secondary w-full text-sm" @click="addRule">添加规则</button>
+                </div>
+                <div class="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div class="mb-2 text-sm font-black text-amber-700">出站节点</div>
+                  <input v-model="outTag" class="suigo-input mb-2 w-full" placeholder="Tag (如 direct)" />
+                  <button class="suigo-secondary w-full text-sm" @click="addOutbound">添加出站</button>
                 </div>
               </div>
-              <button class="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-bold text-red-600 transition hover:bg-red-50" @click="removeNode(node.id)">删除</button>
             </div>
-          </div>
-        </section>
+
+            <!-- Node Table -->
+            <div v-if="nodes.length === 0" class="p-10 text-center text-slate-400">暂无节点。点击「+ 添加节点」或使用侧栏快捷操作快速开始。</div>
+            <div v-else class="divide-y divide-slate-100">
+              <div v-for="node in nodes" :key="node.id" class="flex items-center justify-between gap-4 px-5 py-4 transition hover:bg-slate-50/60">
+                <div class="flex items-center gap-3">
+                  <span class="rounded-full border px-2.5 py-1 text-xs font-bold" :class="kindBadge(node.kind)">{{ kindLabel(node.kind) }}</span>
+                  <div>
+                    <div class="text-sm font-bold text-slate-900">{{ node.label }}</div>
+                    <div class="text-xs text-slate-500">tag: {{ node.tag }}{{ node.port ? ` · port: ${node.port}` : '' }}</div>
+                  </div>
+                </div>
+                <button class="rounded-xl border border-red-200 px-3 py-1.5 text-xs font-bold text-red-600 transition hover:bg-red-50" @click="removeNode(node.id)">删除</button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <Terminal v-show="activeTab === 'terminal'" />
       </div>
+    </div>
 
-      <Terminal v-show="activeTab === 'terminal'" />
-    </section>
-
+    <!-- Share Dialog Modal -->
     <div v-if="shareDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-6 backdrop-blur">
       <section class="max-h-[86vh] w-full max-w-3xl overflow-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
-        <div class="mb-5 flex items-center justify-between"><div><p class="text-xs font-bold uppercase tracking-widest text-emerald-600">Client Provisioning</p><h2 class="mt-2 text-2xl font-black">{{ t('clientLinks') }} / {{ t('subscription') }}</h2></div><button class="suigo-pill" @click="shareDialog = false">{{ t('close') }}</button></div>
-        <div class="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-4"><div class="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">Subscription</div><div class="break-all font-mono text-sm text-slate-700">{{ subscriptionUrl }}</div><button class="suigo-secondary mt-3" @click="copyText(subscriptionUrl, t('copied'))">复制订阅地址</button></div>
-        <div v-for="link in shareLinks" :key="link" class="mb-5 grid gap-4 rounded-2xl border border-slate-200 bg-white p-4 md:grid-cols-[1fr_180px]"><div><div class="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">Native Share Link</div><div class="break-all rounded-xl bg-slate-50 p-3 font-mono text-xs text-slate-700">{{ link }}</div><button class="suigo-secondary mt-3" @click="copyText(link, t('copied'))">复制链接</button></div><div class="flex items-center justify-center rounded-2xl bg-white p-4"><QrcodeVue :value="link" :size="156" level="M" /></div></div>
+        <div class="mb-5 flex items-center justify-between">
+          <div>
+            <p class="text-xs font-bold uppercase tracking-widest text-emerald-600">Client Provisioning</p>
+            <h2 class="mt-2 text-2xl font-black">{{ t('clientLinks') }} / {{ t('subscription') }}</h2>
+          </div>
+          <button class="suigo-pill" @click="shareDialog = false">{{ t('close') }}</button>
+        </div>
+        <div class="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div class="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">Subscription</div>
+          <div class="break-all font-mono text-sm text-slate-700">{{ subscriptionUrl }}</div>
+          <button class="suigo-secondary mt-3" @click="copyText(subscriptionUrl, t('copied'))">复制订阅地址</button>
+        </div>
+        <div v-for="link in shareLinks" :key="link" class="mb-5 grid gap-4 rounded-2xl border border-slate-200 bg-white p-4 md:grid-cols-[1fr_180px]">
+          <div>
+            <div class="mb-2 text-xs font-bold uppercase tracking-widest text-slate-500">Native Share Link</div>
+            <div class="break-all rounded-xl bg-slate-50 p-3 font-mono text-xs text-slate-700">{{ link }}</div>
+            <button class="suigo-secondary mt-3" @click="copyText(link, t('copied'))">复制链接</button>
+          </div>
+          <div class="flex items-center justify-center rounded-2xl bg-white p-4">
+            <QrcodeVue :value="link" :size="156" level="M" />
+          </div>
+        </div>
       </section>
     </div>
   </main>
