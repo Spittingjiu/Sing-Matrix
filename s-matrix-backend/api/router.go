@@ -188,6 +188,8 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "running": dep.Manager.Status(), "config": cfg})
 	})
+	secured.GET("/system/singbox/version", SingboxVersionHandler)
+	secured.POST("/system/singbox/switch", SingboxSwitchWithManagerHandler(dep.Manager))
 	secured.GET("/system/status", func(c *gin.Context) {
 		if !dep.Manager.Status() {
 			_ = dep.Manager.Start()
