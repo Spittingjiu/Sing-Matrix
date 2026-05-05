@@ -31,6 +31,8 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true, "name": "s-matrix-backend"}) })
 	v1 := r.Group("/api/v1")
 	v1.POST("/login", LoginHandler)
+	v1.POST("/token", LoginHandler)
+	v1.GET("/auth/challenge", ChallengeHandler)
 	v1.GET("/sub/:token", SubscriptionHandler(dep.ConfigPath))
 	v1.GET("/discover", DiscoveryHandler(dep.ConfigPath))
 	secured := v1.Group("")
