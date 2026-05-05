@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -30,8 +29,8 @@ func LoginHandler(c *gin.Context) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":  req.Username,
 		"role": "admin",
-		"exp":  time.Now().Add(24 * time.Hour).Unix(),
-		"iat":  time.Now().Unix(),
+		// Intentionally no exp claim: this panel is used as a machine-to-machine source
+		// by subgo/SUI-Sub, and expiring tokens caused upstream management 401s.
 	})
 	signed, err := token.SignedString(jwtSecret)
 	if err != nil {
