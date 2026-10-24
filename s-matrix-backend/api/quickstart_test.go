@@ -26,7 +26,7 @@ func TestBuildShareLinksReadsOneClickConfig(t *testing.T) {
 	defer os.Remove(path)
 	cfg := `{"inbounds":[{"type":"hysteria2","tag":"hy2-oneclick","listen_port":50123,"users":[{"password":"pw"}]}]}`
 	if err := os.WriteFile(path, []byte(cfg), 0644); err != nil { t.Fatal(err) }
-	links, err := BuildShareLinks(path, "sbui.zzao.de")
+	links, err := BuildShareLinks(path, "panel.example.com")
 	if err != nil { t.Fatal(err) }
 	if len(links) != 1 || links[0] == "" { t.Fatalf("bad links: %#v", links) }
 }

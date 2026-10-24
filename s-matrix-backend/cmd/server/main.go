@@ -54,8 +54,23 @@ func main() {
 	certMgr.HTTPSListen = httpsAddr
 	certMgr.StartRenewalLoop()
 
+	// Repair rows written by older versions before the core is touched, so an
+	// old node cannot block startup.
+	api.MigrateLegacyInbounds(db, certDir)
+
 	manager := singbox.NewSingboxManager(singboxBin, configPath, logPath)
-	if _, err := os.Stat(configPath); err == nil {
+	if raw, err := os.ReadFile(configPath); err == nil {
+		// Self-heal: a config written by an older version may be rejected by the
+		// core (for example hysteria2 without TLS). Recompile it from the DB so
+		// the host does not stay offline after an upgrade.
+		if cerr := singbox.CheckConfig(raw); cerr != nil {
+			log.Printf("existing config rejected (%v); rebuilding from database", cerr)
+			if rerr := api.RebuildConfig(db, manager, configPath); rerr != nil {
+				log.Printf("rebuild failed: %v", rerr)
+			} else {
+				log.Printf("config rebuilt from database")
+			}
+		}
 		if err := manager.Start(); err != nil {
 			log.Printf("sing-box auto-start failed: %v", err)
 		} else {
@@ -63,7 +78,7 @@ func main() {
 		}
 	}
 
-	engine := api.NewRouter(api.RouterDeps{Manager: manager, ConfigPath: configPath, LogPath: logPath, DB: db, CertDir: certDir, DataDir: dataDir, ACME: certMgr})
+	engine := api.NewRouter(api.RouterDeps{Manager: manager, ConfigPath: configPath, LogPath: logPath, DB: db, CertDir: certDir, DataDir: dataDir, ACME: certMgr, PanelAddr: addr})
 
 	// Optional built-in TLS: when SMATRIX_HTTPS_ADDR is set (e.g. ":443") the
 	// panel serves itself with the certificates it issued, and SMATRIX_HTTP_ADDR

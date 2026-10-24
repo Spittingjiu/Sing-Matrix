@@ -18,6 +18,13 @@ import (
 func TestRebuildFromDBKeepsEveryEnabledInbound(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
+	// Real certificate files: the compiler now validates against sing-box, which
+	// refuses inbounds whose certificate is missing.
+	for _, name := range []string{"a", "b", "c"} {
+		if _, _, _, err := singbox.EnsureSelfSignedPair(dir, name, "www.bing.com", nil, []string{"www.bing.com"}); err != nil {
+			t.Fatalf("cert %s: %v", name, err)
+		}
+	}
 	// The real manager wants a runnable sing-box; config compilation is what
 	// this test guards, so a stub binary is enough and restart errors are fine.
 	manager := singbox.NewSingboxManager("/bin/true", configPath, filepath.Join(dir, "singbox.log"))

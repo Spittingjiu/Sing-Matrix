@@ -24,6 +24,7 @@ type RouterDeps struct {
 	CertDir    string
 	DataDir    string
 	ACME       *acme.Manager
+	PanelAddr  string
 }
 
 func NewRouter(deps ...RouterDeps) *gin.Engine {
@@ -52,13 +53,15 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	secured.POST("/certs/selfsigned", SelfSignedCertHandler(dep.CertDir))
 	secured.POST("/panel/connect-sub", ConnectSubHandler())
 	secured.GET("/panel/token", PanelTokenHandler())
-	acmeDeps := ACMEDeps{Manager: dep.ACME}
+	acmeDeps := ACMEDeps{Manager: dep.ACME, PanelAddr: dep.PanelAddr}
 	secured.GET("/domain/status", ACMEStatusHandler(acmeDeps))
 	secured.POST("/domain/email", ACMEEmailHandler(acmeDeps))
 	secured.GET("/domain/check", ACMECheckHandler(acmeDeps))
 	secured.POST("/domain/issue", ACMECertHandler(acmeDeps))
+	secured.POST("/domain/publish", ACMEPublishHandler(acmeDeps))
+	secured.DELETE("/domain/publish", ACMEUnpublishHandler(acmeDeps))
 	secured.GET("/domain/certs", ACMECertListHandler(acmeDeps))
-	secured.POST("/quick/anytls-domain", QuickAnyTLSDomainHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB, CertDir: dep.CertDir, DataDir: dep.DataDir, ACME: dep.ACME}))
+	secured.POST("/quick/anytls-domain", QuickAnyTLSDomainHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB, CertDir: dep.CertDir, DataDir: dep.DataDir, ACME: dep.ACME, PanelAddr: dep.PanelAddr}))
 	if dep.DB != nil {
 		secured.GET("/inbounds", ListInboundsHandler(dep.DB))
 		secured.POST("/inbounds/:id/toggle", ToggleInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))

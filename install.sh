@@ -52,6 +52,10 @@ while [ $# -gt 0 ]; do
     --purge) PURGE=1; shift ;;
     --upgrade) ACTION=upgrade; shift ;;
     --status) ACTION=status; shift ;;
+    --menu) ACTION=menu; shift ;;
+    --set-user) ACTION=setuser; NEW_USER="$2"; shift 2 ;;
+    --set-pass) ACTION=setpass; NEW_PASS="$2"; shift 2 ;;
+    --show-pass) ACTION=showpass; shift ;;
     -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -244,6 +248,7 @@ $(printf '%s' "${C_OK}")安装完成$(printf '%s' "${C_OFF}")
   数据目录   ${DATA_DIR}
   证书目录   ${CERT_DIR}
   服务管理   systemctl {status,restart,stop} ${SERVICE}
+  管理菜单   sm          （改用户名/密码、改端口、看状态、升级、卸载）
   查看日志   journalctl -u ${SERVICE} -f
 
 下一步：
@@ -263,6 +268,31 @@ EOF
   say ""
 }
 
+
+# ---------- sm helper command ----------
+
+SM_LIB_DIR="${SM_LIB_DIR:-/usr/local/lib/smatrix}"
+SM_BIN_PATH="${SM_BIN_PATH:-/usr/local/bin/sm}"
+
+install_sm() {
+  mkdir -p "${SM_LIB_DIR}" "$(dirname "${SM_BIN_PATH}")"
+  local installed="${SM_LIB_DIR}/install.sh"
+  if [ -f "$0" ] && head -1 "$0" 2>/dev/null | grep -q '^#!.*bash'; then
+    cp -a "$0" "${installed}"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/install.sh" -o "${installed}" \
+      || warn "无法保存管理脚本，sm 命令可能不可用"
+  fi
+  chmod +x "${installed}" 2>/dev/null || true
+  cat > "${SM_BIN_PATH}" <<EOF
+#!/bin/sh
+# S-Matrix helper - no arguments opens the interactive menu.
+exec bash "${installed}" --menu "\$@"
+EOF
+  chmod +x "${SM_BIN_PATH}"
+  ok "已安装管理命令: sm"
+}
+
 do_install() {
   need_root
   install_deps
@@ -270,6 +300,7 @@ do_install() {
   install_binary
   seed_credentials
   write_env
+  mkdir -p "${DATA_DIR}" && printf '%s\n' "${PORT}" > "${DATA_DIR}/.port"
   prepare_webroot
   if [ "${WITH_SERVICE}" = "1" ]; then
     install_unit
@@ -277,6 +308,7 @@ do_install() {
   else
     warn "已跳过 systemd（--no-service），手动启动: ${BIN}"
   fi
+  install_sm
   firewall_hint
   print_result
 }
@@ -284,6 +316,7 @@ do_install() {
 do_upgrade() {
   need_root
   [ -x "${BIN}" ] || die "未检测到已安装的面板，请先安装"
+  install_sm
   local old backup
   old="$("${BIN}" --version 2>/dev/null || true)"
   [ -n "${old}" ] && say "当前版本: ${old}"
@@ -325,9 +358,180 @@ do_status() {
   [ -f "${DATA_DIR}/panel_creds.json" ] && ok "数据目录: ${DATA_DIR}"
 }
 
+
+# ---------- interactive menu ----------
+
+read_password() {
+  local p=""
+  if [ -t 0 ]; then
+    read -r -s -p "请输入新密码（留空自动生成 20 位）: " p
+    echo
+  fi
+  if [ -z "${p}" ]; then
+    p="$(gen_secret)"
+    printf '%s\n' "已自动生成密码: ${p}"
+  fi
+  printf '%s' "${p}"
+}
+
+write_cred() { # $1=user $2=pass
+  local creds="${DATA_DIR}/panel_creds.json"
+  mkdir -p "${DATA_DIR}"
+  [ -f "${creds}" ] && cp -a "${creds}" "${creds}.bak-$(date +%Y%m%d%H%M%S)"
+  printf '{\n  "username": "%s",\n  "password": "%s"\n}\n' "$1" "$2" > "${creds}"
+  chmod 600 "${creds}"
+}
+
+# unit_belongs guards every service action: on a host with several panels, the
+# helper for one install must never restart another install's service.
+unit_belongs() {
+  local unit="/etc/systemd/system/${SERVICE}.service"
+  [ -f "${unit}" ] || return 1
+  grep -q "^ExecStart=${BIN}$" "${unit}"
+}
+
+restart_panel() {
+  if unit_belongs; then
+    systemctl restart "${SERVICE}"
+    sleep 2
+    if systemctl is-active --quiet "${SERVICE}"; then ok "面板已重启"; else die "面板重启失败，请查看 journalctl -u ${SERVICE} -n 50"; fi
+  elif systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE}.service"; then
+    warn "本机存在另一个 ${SERVICE} 服务（不属于 ${INSTALL_DIR}），已跳过重启"
+  else
+    warn "未找到 ${SERVICE} 服务，改动会在下次启动时生效"
+  fi
+}
+
+port_of() {
+  local unit="/etc/systemd/system/${SERVICE}.service"
+  if unit_belongs; then
+    sed -n 's/.*SMATRIX_ADDR=[^:]*:\([0-9]*\).*/\1/p' "${unit}" | head -1
+    return
+  fi
+  if [ -f "${DATA_DIR}/.port" ]; then
+    cat "${DATA_DIR}/.port"
+    return
+  fi
+  echo "?"
+}
+
+show_info() {
+  local port user pass ip ver state cores
+  port="$(port_of)"
+  user="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
+  pass="$(sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
+  ip="$(curl -fsS -m 5 https://api.ipify.org 2>/dev/null || echo '?')"
+  ver="$("${BIN}" --version 2>/dev/null | awk '{print $2}')"
+  if unit_belongs && systemctl is-active --quiet "${SERVICE}" 2>/dev/null; then
+    state="${C_OK}运行中${C_OFF}"
+  elif unit_belongs; then
+    state="${C_ERR}未运行${C_OFF}"
+  else
+    state="${C_WARN}未注册为服务${C_OFF}"
+  fi
+  if pgrep -f "sing-box run" >/dev/null 2>&1; then cores="${C_OK}运行中${C_OFF}"; else cores="${C_WARN}未运行${C_OFF}"; fi
+  printf '\n%s当前状态%s\n' "${C_DIM}" "${C_OFF}"
+  printf '  面板地址   http://%s:%s/\n' "${ip}" "${port}"
+  printf '  用户名     %s\n' "${user:-?}"
+  printf '  密码       %s\n' "${pass:-?}"
+  printf '  面板版本   %s\n' "${ver:-?}"
+  printf '  面板服务   %b\n' "${state}"
+  printf '  sing-box   %b (%s)\n' "${cores}" "$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}')"
+  printf '  安装目录   %s\n' "${INSTALL_DIR}"
+  printf '  节点数     %s\n' "$(grep -c '"listen_port"' "${DATA_DIR}/config.json" 2>/dev/null || echo 0)"
+  printf '\n'
+}
+
+change_user() {
+  local u cur
+  cur="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
+  if [ -n "${NEW_USER}" ]; then u="${NEW_USER}"; else
+    read -r -p "新用户名 [${cur}]: " u
+    [ -z "${u}" ] && u="${cur}"
+  fi
+  [ -n "${u}" ] || die "用户名不能为空"
+  local p
+  p="$(sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
+  write_cred "${u}" "${p}"
+  ok "用户名已改为 ${u}"
+  restart_panel
+}
+
+change_pass() {
+  local p
+  if [ -n "${NEW_PASS}" ]; then p="${NEW_PASS}"; else p="$(read_password)"; fi
+  [ -n "${p}" ] || die "密码不能为空"
+  local u
+  u="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
+  [ -n "${u}" ] || u="admin"
+  write_cred "${u}" "${p}"
+  ok "密码已更新（用户 ${u}）"
+  restart_panel
+}
+
+change_port() {
+  local cur new
+  cur="$(port_of)"
+  read -r -p "新端口 [${cur}]: " new
+  [ -z "${new}" ] && return 0
+  case "${new}" in ''|*[!0-9]*) die "端口必须是数字" ;; esac
+  local unit="/etc/systemd/system/${SERVICE}.service"
+  cp -a "${unit}" "${unit}.bak-$(date +%Y%m%d%H%M%S)"
+  sed -i "s/\(SMATRIX_ADDR=[^:]*:\)[0-9]*/\1${new}/" "${unit}"
+  systemctl daemon-reload
+  restart_panel
+  ok "端口已改为 ${new}（如有防火墙/安全组请同步放行）"
+}
+
+show_secret() {
+  local p
+  p="$(sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
+  printf '\n用户名 %s\n密码   %s\n\n' \
+    "$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)" "${p}"
+}
+
+menu() {
+  need_root
+  while true; do
+    cat <<EOF
+
+$(printf '%s' "${C_DIM}")S-Matrix 管理$(printf '%s' "${C_OFF}")
+  1) 查看当前状态 / 账号密码
+  2) 修改用户名
+  3) 修改密码
+  4) 修改面板端口
+  5) 重启面板服务
+  6) 查看面板日志
+  7) 查看节点实时日志
+  8) 升级到最新版本
+  9) 卸载
+  0) 退出
+EOF
+    local c
+    if [ -t 0 ]; then read -r -p "选择 [0-9]: " c; else die "sm 需要在交互终端里运行"; fi
+    case "${c}" in
+      1) show_info ;;
+      2) change_user ;;
+      3) change_pass ;;
+      4) change_port ;;
+      5) restart_panel ;;
+      6) if unit_belongs; then journalctl -u "${SERVICE}" -n 60 --no-pager; else warn "本次安装未注册为服务"; fi ;;
+      7) if unit_belongs; then journalctl -u "${SERVICE}" -f; else warn "本次安装未注册为服务"; fi ;;
+      8) do_upgrade ;;
+      9) read -r -p "确认卸载？数据默认保留 [y/N]: " a; case "${a}" in y|Y) do_uninstall ;; *) echo "已取消" ;; esac ;;
+      0|"") exit 0 ;;
+      *) warn "无效选择" ;;
+    esac
+  done
+}
+
 case "${ACTION}" in
   install) do_install ;;
   upgrade) do_upgrade ;;
   uninstall) do_uninstall ;;
   status) do_status ;;
+  menu) menu ;;
+  setuser) need_root; change_user; show_info ;;
+  setpass) need_root; change_pass ;;
+  showpass) show_secret ;;
 esac

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -55,11 +56,15 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 		byID[node.ID] = node
 		switch kind {
 		case "inbound-hy2":
+			cert, key, err := requireTLSCert(node.Data, "hysteria2")
+			if err != nil {
+				return cfg, err
+			}
 			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewHysteria2Inbound(tagOf(node), port, str(node.Data, "password", "change-me"), str(node.Data, "masquerade", "https://www.bing.com"))
+			in := NewHysteria2Inbound(tagOf(node), port, str(node.Data, "password", "change-me"), str(node.Data, "masquerade", "https://www.bing.com"), cert, key, str(node.Data, "server_name", str(node.Data, "sni", "")))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-reality":
@@ -216,6 +221,42 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 	return cfg, nil
 }
 
+// CheckConfig runs `sing-box check` against a candidate config so a bad node can
+// never take the running core down. It returns nil when the core binary is not
+// available (e.g. building on a dev box), because the runtime restart performs
+// the same check again.
+func CheckConfig(data []byte) error {
+	bin := os.Getenv("SMATRIX_SINGBOX_BIN")
+	if bin == "" {
+		bin = "sing-box"
+	}
+	if _, err := exec.LookPath(bin); err != nil {
+		return nil
+	}
+	tmp, err := os.CreateTemp("", "smatrix-check-*.json")
+	if err != nil {
+		return nil
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return nil
+	}
+	tmp.Close()
+	out, err := exec.Command(bin, "check", "-c", tmp.Name()).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		msg = strings.TrimPrefix(msg, "FATAL[0000] ")
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("配置未通过 sing-box 校验：%s", msg)
+	}
+	return nil
+}
+
+// CompileAndWrite validates the generated config before replacing the live file,
+// so a rejected node leaves both the file and the running core untouched.
 func CompileAndWrite(uiData UIData, path string) (Config, error) {
 	cfg, err := CompileToSingbox(uiData)
 	if err != nil {
@@ -223,6 +264,9 @@ func CompileAndWrite(uiData UIData, path string) (Config, error) {
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
+		return cfg, err
+	}
+	if err := CheckConfig(data); err != nil {
 		return cfg, err
 	}
 	return cfg, os.WriteFile(path, data, 0644)

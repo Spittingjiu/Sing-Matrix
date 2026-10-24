@@ -113,6 +113,21 @@ async function showQR(id){try{state.shareLinks=await inboundLinks(id);showShare(
 function closeModal(){$('#modalRoot').innerHTML=''}
 function setFieldsByProto(){const p=$('#fProtocol').value;const extra=$('#protoFields');const cert='<input id="fCertDomain" class="input" placeholder="自己的域名（指向本机后可申请证书；留空用自签）"><button type="button" class="btn primary" style="width:100%" id="issueDomainCert">校验域名并申请证书</button><input id="fCertPath" class="input" placeholder="certificate_path（必填）"><input id="fKeyPath" class="input" placeholder="key_path（必填）"><button type="button" class="btn secondary" style="width:100%" id="genSelfSigned">生成自签证书并填入路径</button>';const final='<input id="fFinalMask" class="input" placeholder="FinalMask / path / obfs（可选）">';const common={reality:`<input id="fUUID" class="input" placeholder="UUID" value="${uuid()}"><input id="fDest" class="input" placeholder="伪装目标 www.microsoft.com:443" value="www.microsoft.com:443"><input id="fSNI" class="input" placeholder="SNI" value="www.microsoft.com"><input id="fPrivKey" class="input" placeholder="Private Key"><input id="fPubKey" class="input" placeholder="Public Key"><input id="fShortID" class="input" placeholder="Short ID" value="${randHex(8)}">${final}`,hy2:`<input id="fPassword" class="input" placeholder="密码" value="${password()}"><input id="fMasquerade" class="input" placeholder="masquerade URL" value="https://www.bing.com">`,hysteria:`<input id="fPassword" class="input" placeholder="auth_str" value="${password()}"><input id="fUpMbps" class="input" type="number" placeholder="上行 Mbps" value="100"><input id="fDownMbps" class="input" type="number" placeholder="下行 Mbps" value="100"><input id="fObfs" class="input" placeholder="obfs / FinalMask（可选）">${cert}`,vmess:`<input id="fUUID" class="input" placeholder="UUID" value="${uuid()}"><select id="fNetwork" class="select"><option>tcp</option><option>ws</option><option>httpupgrade</option><option>grpc</option><option>http</option></select><input id="fPath" class="input" placeholder="path" value="/"><input id="fHost" class="input" placeholder="host / FinalMask"><select id="fVMessSecurity" class="select"><option>auto</option><option>aes-128-gcm</option><option>chacha20-poly1305</option><option>none</option><option>zero</option></select>`,trojan:`<input id="fPassword" class="input" placeholder="密码" value="${password()}">`,ss:`<select id="fMethod" class="select"><option>aes-128-gcm</option><option>aes-192-gcm</option><option>aes-256-gcm</option><option>chacha20-ietf-poly1305</option><option>xchacha20-ietf-poly1305</option><option>2022-blake3-aes-128-gcm</option><option>2022-blake3-aes-256-gcm</option><option>2022-blake3-chacha20-poly1305</option></select><input id="fPassword" class="input" placeholder="密码" value="${password()}">`,tuic:`<input id="fUUID" class="input" placeholder="UUID" value="${uuid()}"><input id="fPassword" class="input" placeholder="密码" value="${password()}"><select id="fCongestion" class="select"><option>cubic</option><option>bbr</option><option>new_reno</option></select>${cert}`,naive:`<input id="fUsername" class="input" placeholder="用户名" value="user"><input id="fPassword" class="input" placeholder="密码" value="${password()}"><select id="fNetwork" class="select"><option>tcp</option><option>udp</option></select><select id="fCongestion" class="select"><option value="">默认拥塞控制</option><option>bbr</option><option>bbr2</option><option>cubic</option><option>reno</option></select>${cert}`,shadowtls:`<input id="fPassword" class="input" placeholder="密码" value="${password()}"><input id="fSNI" class="input" placeholder="握手域名" value="www.microsoft.com"><select id="fWildcardSNI" class="select"><option value="">wildcard_sni: off</option><option>authed</option><option>all</option></select>`,anytls:`<input id="fPassword" class="input" placeholder="密码" value="${password()}"><input id="fSNI" class="input" placeholder="SNI / 自签证书 CN" value="www.bing.com"><textarea id="fPaddingScheme" class="input" style="height:76px;padding-top:9px" placeholder="padding_scheme，每行一条，可选"></textarea>${cert}`,socks:`<div class="muted small">无需额外参数</div>`,http:`<div class="muted small">无需额外参数</div>`};extra.innerHTML=common[p]||common.reality}
 function fillEdit(ib){$('#fRemark').value=ib.tag;$('#fPort').value=ib.port;$('#fProtocol').value=protoFromDB(ib.type);setFieldsByProto();bindProtoExtras();let p={};try{p=JSON.parse(ib.payload||'{}')}catch{};for(const [k,v] of Object.entries({fUUID:p.uuid,fPassword:p.password||p.auth_str,fUsername:p.username,fMethod:p.method,fDest:p.dest,fSNI:p.server_name||p.sni,fPrivKey:p.private_key,fPubKey:p.public_key,fShortID:p.short_id,fNetwork:p.network,fPath:p.path,fHost:p.host||p.finalmask||p.final_mask,fVMessSecurity:p.vmess_security,fMasquerade:p.masquerade,fUpMbps:p.up_mbps,fDownMbps:p.down_mbps,fObfs:p.obfs||p.finalmask||p.final_mask,fCertPath:p.certificate_path||p.cert_path,fKeyPath:p.key_path,fCongestion:p.congestion_control||p.quic_congestion_control,fWildcardSNI:p.wildcard_sni,fFinalMask:p.finalmask||p.final_mask,fPaddingScheme:Array.isArray(p.padding_scheme)?p.padding_scheme.join('\n'):p.padding_scheme})){const el=$('#'+k);if(el&&v!==undefined&&v!==null&&v!=='')el.value=v}}
+async function publishHttps(domain){
+  const out=$('#domainOut');
+  out.textContent=`正在为 ${domain} 配置 HTTPS 反向代理…`;
+  try{
+    const r=await api('/api/v1/domain/publish',{method:'POST',body:JSON.stringify({domain})});
+    const d=await r.json();
+    if(!r.ok||d.ok===false)throw new Error(d.error||'failed');
+    out.textContent=`已配置 ${domain} → ${d.https_url}\n方式：${d.provider}（${d.config_path}）\n3 秒后跳转到 HTTPS…`;
+    toast('HTTPS 已启用');
+    setTimeout(()=>{location.href=d.https_url},3000);
+  }catch(e){
+    out.textContent='配置失败：'+String(e);
+    setAlert('error','HTTPS 配置失败：'+String(e));
+  }
+}
 async function saveAcmeEmail(){
   const out=$('#domainOut');const email=($('#acmeEmail')&&$('#acmeEmail').value||'').trim();
   try{
@@ -136,7 +151,11 @@ async function loadAcmeStatus(){
     const box=$('#certList');
     if(box){
       const certs=(d2&&d2.certs)||[];
-      box.innerHTML=certs.length?('<b>已签发证书</b><br>'+certs.map(x=>`${esc(x.domain)} · 到期 ${esc(String(x.not_after||'').slice(0,10))}`).join('<br>')):'暂无已签发证书';
+      box.innerHTML=certs.length?certs.map(x=>`<div class="cert">
+        <span><b>${esc(x.domain)}</b> <span class="muted small">到期 ${esc(String(x.not_after||'').slice(0,10))}</span></span>
+        <button class="btn ghost sm" data-publish="${esc(x.domain)}">套用 HTTPS</button>
+      </div>`).join(''):'<span class="muted">暂无已签发证书</span>';
+      $$('[data-publish]').forEach(b=>b.onclick=()=>publishHttps(b.dataset.publish));
     }
   }catch(e){out.textContent='读取失败：'+String(e)}
 }
@@ -210,7 +229,8 @@ async function runDomainNode(){
     const r=await api('/api/v1/quick/anytls-domain',{method:'POST',body:JSON.stringify(body)});
     const d=await r.json();
     if(!r.ok||d.ok===false)throw new Error(d.error||'failed');
-    out.textContent=`✅ ${d.domain} 已就绪\n端口 ${d.port}\n证书到期 ${String(d.cert_expires||'').slice(0,10)}\n${d.link||''}`;
+    out.textContent=`✅ ${d.domain} 已就绪\n端口 ${d.port}\n证书到期 ${String(d.cert_expires||'').slice(0,10)}\n${d.link||''}`
+      + (d.publish_error?`\n\n⚠️ HTTPS 未自动套用：${d.publish_error}\n可在「设置 → 域名 / 证书」里点「套用 HTTPS」重试`:(d.auto_redirect?`\n\n已在该域名上启用 HTTPS（${d.site_provider||''}）`:''));
     state.shareLinks=d.link?[d.link]:(d.links||[]);
     state.subscription=d.subscription||state.subscription;
     await loadInbounds();await loadStatus();
@@ -355,7 +375,7 @@ async function renderApp(){
         <div class="card-body">
           <p class="muted small" style="margin:0 0 12px">把本面板作为 SBUI 源写入 subgo，自动带上面板地址与永久 Token。</p>
           <div class="grid2">
-            <div class="field"><label>subgo 地址</label><input id="subgoUrl" class="input" value="https://subgo.2000319.xyz"></div>
+            <div class="field"><label>subgo 地址</label><input id="subgoUrl" class="input" placeholder="https://你的-subgo-域名"></div>
             <div class="field"><label>源名称</label><input id="subgoName" class="input" value="S-Matrix"></div>
             <div class="field"><label>用户名</label><input id="subgoUser" class="input" value="admin"></div>
             <div class="field"><label>密码</label><input id="subgoPass" class="input" type="password" placeholder="subgo 密码"></div>

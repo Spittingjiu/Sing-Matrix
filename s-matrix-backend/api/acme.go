@@ -1,6 +1,8 @@
 package api
 
 import (
+	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -8,11 +10,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"s-matrix/core/acme"
+	"s-matrix/core/httpsite"
 )
 
 // ACMEDeps carries what the domain/certificate endpoints need.
 type ACMEDeps struct {
-	Manager *acme.Manager
+	Manager   *acme.Manager
+	PanelAddr string
 }
 
 // acmeEmailPath stores the optional contact address an operator configures.
@@ -116,14 +120,14 @@ func ACMECertHandler(dep ACMEDeps) gin.HandlerFunc {
 		}
 		st := dep.Manager.Status()
 		c.JSON(http.StatusOK, gin.H{
-			"ok":          true,
-			"domain":      cert.Domain,
-			"cert_path":   cert.CertPath,
-			"key_path":    cert.KeyPath,
-			"not_after":   cert.NotAfter.Format(time.RFC3339),
-			"https_url":   "https://" + domain,
+			"ok":            true,
+			"domain":        cert.Domain,
+			"cert_path":     cert.CertPath,
+			"key_path":      cert.KeyPath,
+			"not_after":     cert.NotAfter.Format(time.RFC3339),
+			"https_url":     "https://" + domain,
 			"auto_redirect": st.AutoRedirect,
-			"mode":        st.Mode,
+			"mode":          st.Mode,
 		})
 	}
 }
@@ -141,5 +145,84 @@ func ACMECertListHandler(dep ACMEDeps) gin.HandlerFunc {
 			list = append(list, v)
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "certs": list})
+	}
+}
+
+// upstreamAddr is the loopback address the reverse proxy should forward to.
+func upstreamAddr(panelAddr string) string {
+	host, port, err := net.SplitHostPort(panelAddr)
+	if err != nil {
+		return "127.0.0.1:19088"
+	}
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
+}
+
+// ACMEPublishHandler wires https://<domain> to this panel: it writes a TLS vhost
+// into the host's reverse proxy using the certificate the panel just issued, so
+// the operator does not have to hand-edit nginx/Caddy.
+func ACMEPublishHandler(dep ACMEDeps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Domain string `json:"domain"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "bad json"})
+			return
+		}
+		domain := strings.ToLower(strings.TrimSpace(req.Domain))
+		if domain == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "domain required"})
+			return
+		}
+		out, err := publishDomain(dep, domain)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, out)
+	}
+}
+
+func publishDomain(dep ACMEDeps, domain string) (gin.H, error) {
+	meta, err := dep.Manager.LoadMeta()
+	if err != nil {
+		return nil, err
+	}
+	cert, ok := meta[domain]
+	if !ok {
+		return nil, fmt.Errorf("还没有为 %s 签发过证书，请先签发", domain)
+	}
+	res, err := httpsite.Publish(domain, cert.CertPath, cert.KeyPath, upstreamAddr(dep.PanelAddr), dep.Manager.Webroot)
+	if err != nil {
+		return nil, err
+	}
+	return gin.H{
+		"ok":          true,
+		"domain":      domain,
+		"https_url":   res.URL,
+		"provider":    res.Provider,
+		"config_path": res.ConfigPath,
+		"reloaded":    res.Reloaded,
+		"backup":      res.Backup,
+	}, nil
+}
+
+// ACMEUnpublishHandler removes the vhost again.
+func ACMEUnpublishHandler(dep ACMEDeps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		domain := strings.ToLower(strings.TrimSpace(c.Query("domain")))
+		if domain == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "domain required"})
+			return
+		}
+		if err := httpsite.Remove(domain); err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "domain": domain})
 	}
 }

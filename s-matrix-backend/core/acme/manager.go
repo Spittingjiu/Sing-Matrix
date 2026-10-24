@@ -144,6 +144,8 @@ func (m *Manager) loadAccountKey() (*ecdsa.PrivateKey, error) {
 }
 
 // emailFor derives a contact address when the operator did not configure one.
+// Let's Encrypt sends expiry notices here, so it must be the operator's own
+// address rather than anything hardcoded by the project.
 func (m *Manager) emailFor(domain string) string {
 	if e := strings.TrimSpace(m.Email); e != "" {
 		return e

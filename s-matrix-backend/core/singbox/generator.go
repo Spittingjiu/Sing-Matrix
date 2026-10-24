@@ -112,8 +112,11 @@ func NewRealityInbound(tag string, port int, uuid string, privateKey string, pub
 	}
 }
 
-func NewHysteria2Inbound(tag string, port int, password string, masquerade string) Inbound {
-	return Inbound{
+// NewHysteria2Inbound builds a Hysteria2 inbound. Hysteria2 runs over QUIC+TLS,
+// so sing-box refuses the whole config ("TLS required") without a certificate -
+// which is exactly how a cert-less node used to take every other node down.
+func NewHysteria2Inbound(tag string, port int, password string, masquerade string, certPath string, keyPath string, serverName string) Inbound {
+	in := Inbound{
 		Type:       "hysteria2",
 		Tag:        tag,
 		Listen:     "::",
@@ -121,6 +124,14 @@ func NewHysteria2Inbound(tag string, port int, password string, masquerade strin
 		Users:      []User{{Password: password}},
 		Masquerade: masquerade,
 	}
+	if certPath != "" && keyPath != "" {
+		tls := map[string]interface{}{"enabled": true, "certificate_path": certPath, "key_path": keyPath}
+		if serverName != "" {
+			tls["server_name"] = serverName
+		}
+		in.TLS = tls
+	}
+	return in
 }
 
 func NewVMessInbound(tag string, port int, uuid string, network string, path string, host string, tls bool, serverName string) Inbound {
@@ -291,7 +302,7 @@ func BuildTestConfig() Config {
 		DNS: &DNS{Servers: []DNSServer{{Tag: "cloudflare", Address: "https://1.1.1.1/dns-query"}, {Tag: "alidns", Address: "https://dns.alidns.com/dns-query"}}},
 		Inbounds: []Inbound{
 			NewRealityInbound("reality-443", 443, "00000000-0000-0000-0000-000000000000", "CHANGE_ME_PRIVATE_KEY", "CHANGE_ME_PUBLIC_KEY", "0123456789abcdef", "www.cloudflare.com"),
-			NewHysteria2Inbound("hy2-44300", 44300, "change-me-password", "https://www.bing.com"),
+			NewHysteria2Inbound("hy2-44300", 44300, "change-me-password", "https://www.bing.com", "", "", ""),
 		},
 		Outbounds: []Outbound{{Type: "direct", Tag: "direct"}, {Type: "block", Tag: "block"}},
 		Route: Route{

@@ -120,9 +120,24 @@ func (m *SingboxManager) stopLocked() {
 	m.killStrayLocked()
 }
 
+// Restart validates the config before touching the running process: a rejected
+// config must never stop a healthy core, because that would take every node on
+// the host offline instead of just the bad one.
 func (m *SingboxManager) Restart() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, err := os.Stat(m.ConfigPath); err == nil {
+		if out, err := exec.Command(m.Bin, "check", "-c", m.ConfigPath).CombinedOutput(); err != nil {
+			msg := strings.TrimSpace(string(out))
+			msg = strings.TrimPrefix(msg, "FATAL[0000] ")
+			if msg == "" {
+				msg = err.Error()
+			}
+			line := fmt.Sprintf("配置校验未通过，已保留运行中的 sing-box：%s", msg)
+			m.writeLog(line)
+			return fmt.Errorf("%s", line)
+		}
+	}
 	m.stopLocked()
 	time.Sleep(300 * time.Millisecond)
 	return m.startLocked()

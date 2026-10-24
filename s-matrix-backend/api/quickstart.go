@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"s-matrix/core/acme"
+	"s-matrix/core/httpsite"
 	"s-matrix/core/singbox"
 	"s-matrix/models"
 )
@@ -27,6 +28,7 @@ type quickDeps struct {
 	CertDir    string
 	DataDir    string
 	ACME       *acme.Manager
+	PanelAddr  string
 }
 
 func QuickRealityHandler(dep quickDeps) gin.HandlerFunc {
@@ -76,11 +78,23 @@ func QuickHY2Handler(dep quickDeps) gin.HandlerFunc {
 		if remark == "" {
 			remark = fmt.Sprintf("HY2 :%d", port)
 		}
+		// Hysteria2 is QUIC+TLS: without a certificate sing-box refuses to start,
+		// which would take every other node on the host down with it.
+		certName := fmt.Sprintf("hy2-%d", port)
+		certPath, keyPath, _, err := singbox.EnsureSelfSignedPair(resolveCertDir(dep.CertDir), certName, "www.bing.com", singbox.LocalIPs(), []string{"www.bing.com"})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成自签证书失败: " + err.Error()})
+			return
+		}
 		topo := singleInboundTopology("hy2-oneclick", "inbound-hy2", port, remark, map[string]interface{}{
-			"tag":        remark,
-			"port":       port,
-			"password":   randomHex(28),
-			"masquerade": "https://www.bing.com",
+			"tag":              remark,
+			"port":             port,
+			"password":         randomHex(28),
+			"masquerade":       "https://www.bing.com",
+			"server_name":      "www.bing.com",
+			"sni":              "www.bing.com",
+			"certificate_path": certPath,
+			"key_path":         keyPath,
 		})
 		respondQuick(c, dep, topo, "hy2", port)
 	}
@@ -346,6 +360,27 @@ func QuickAnyTLSDomainHandler(dep quickDeps) gin.HandlerFunc {
 		own := fmt.Sprintf("anytls://%s@%s:%d?sni=%s#%s",
 			url.QueryEscape(password), domain, port, url.QueryEscape(domain), url.QueryEscape(remark))
 		st := dep.ACME.Status()
+
+		// Make https://<domain> actually serve this panel: writing the vhost here
+		// (nginx or Caddy) is the difference between "certificate issued" and
+		// "you can open the panel over HTTPS". Failures are reported, not fatal.
+		httpsURL := "https://" + domain
+		autoRedirect := false
+		siteProvider := ""
+		publishErr := ""
+		if dep.PanelAddr != "" {
+			if res, err := httpsite.Publish(domain, cert.CertPath, cert.KeyPath, upstreamAddr(dep.PanelAddr), dep.ACME.Webroot); err != nil {
+				publishErr = err.Error()
+			} else {
+				autoRedirect = res.Reloaded
+				siteProvider = res.Provider
+				httpsURL = res.URL
+			}
+		}
+		if !autoRedirect && st.AutoRedirect {
+			autoRedirect = true
+			siteProvider = "builtin"
+		}
 		respondQuick(c, dep, topo, "anytls", port, gin.H{
 			"domain":        domain,
 			"cert_path":     cert.CertPath,
@@ -353,8 +388,10 @@ func QuickAnyTLSDomainHandler(dep quickDeps) gin.HandlerFunc {
 			"acme":          true,
 			"link":          own,
 			"mode":          st.Mode,
-			"auto_redirect": st.AutoRedirect,
-			"https_url":     "https://" + domain,
+			"auto_redirect": autoRedirect,
+			"https_url":     httpsURL,
+			"site_provider": siteProvider,
+			"publish_error": publishErr,
 		})
 	}
 }

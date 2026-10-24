@@ -27,15 +27,56 @@ func TestCompileExpandedProtocols(t *testing.T) {
 	}
 	for _, tc := range cases {
 		data := map[string]interface{}{"tag": tc.want + "-in", "port": 0}
-		for k, v := range tc.data { data[k] = v }
+		for k, v := range tc.data {
+			data[k] = v
+		}
 		cfg, err := CompileToSingbox(UIData{Nodes: []UINode{{ID: "n1", Kind: tc.kind, Data: data}}})
-		if err != nil { t.Fatalf("%s compile failed: %v", tc.kind, err) }
-		if len(cfg.Inbounds) != 1 || cfg.Inbounds[0].Type != tc.want { t.Fatalf("%s got %+v", tc.kind, cfg.Inbounds) }
+		if err != nil {
+			t.Fatalf("%s compile failed: %v", tc.kind, err)
+		}
+		if len(cfg.Inbounds) != 1 || cfg.Inbounds[0].Type != tc.want {
+			t.Fatalf("%s got %+v", tc.kind, cfg.Inbounds)
+		}
 	}
 }
 
 func TestFinalMaskTransport(t *testing.T) {
 	cfg, err := CompileToSingbox(UIData{Nodes: []UINode{{ID: "n1", Kind: "inbound-reality", Data: map[string]interface{}{"tag": "r", "port": 0, "finalmask": "/fm"}}}})
-	if err != nil { t.Fatal(err) }
-	if cfg.Inbounds[0].Transport == nil || cfg.Inbounds[0].Transport["path"] != "/fm" { t.Fatalf("finalmask not mapped: %+v", cfg.Inbounds[0].Transport) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Inbounds[0].Transport == nil || cfg.Inbounds[0].Transport["path"] != "/fm" {
+		t.Fatalf("finalmask not mapped: %+v", cfg.Inbounds[0].Transport)
+	}
+}
+
+// Hysteria2 without a certificate makes sing-box reject the entire config, so
+// the compiler must refuse it up front instead of writing a file that kills
+// every node on the host.
+func TestHysteria2RequiresCertificate(t *testing.T) {
+	ui := UIData{Nodes: []UINode{
+		{ID: "hy2", Kind: "inbound-hy2", Data: map[string]interface{}{"tag": "hy2", "port": 44301, "password": "pw"}},
+	}}
+	if _, err := CompileToSingbox(ui); err == nil {
+		t.Fatalf("expected an error for cert-less hysteria2")
+	}
+}
+
+func TestHysteria2WithCertificateCompiles(t *testing.T) {
+	ui := UIData{Nodes: []UINode{
+		{ID: "hy2", Kind: "inbound-hy2", Data: map[string]interface{}{
+			"tag": "hy2", "port": 44302, "password": "pw",
+			"certificate_path": "/tmp/c.pem", "key_path": "/tmp/c.key", "server_name": "www.bing.com",
+		}},
+	}}
+	cfg, err := CompileToSingbox(ui)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if len(cfg.Inbounds) != 1 {
+		t.Fatalf("want 1 inbound, got %d", len(cfg.Inbounds))
+	}
+	if cfg.Inbounds[0].TLS == nil || cfg.Inbounds[0].TLS["enabled"] != true {
+		t.Fatalf("hysteria2 inbound must carry tls: %+v", cfg.Inbounds[0].TLS)
+	}
 }

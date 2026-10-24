@@ -46,6 +46,38 @@ curl -fsSL .../install.sh | sudo bash -s -- --status
 
 参数也可以用环境变量传：`SMATRIX_PORT`、`SMATRIX_LISTEN`、`SMATRIX_INSTALL_DIR`、`SMATRIX_VERSION`、`SMATRIX_WITH_SINGBOX`、`SMATRIX_SYSTEMD`、`SMATRIX_WEBROOT`。
 
+### 装完之后：`sm` 管理菜单
+
+安装脚本会装一个 `sm` 命令，不带参数就是交互菜单：
+
+```bash
+sm
+```
+
+```
+S-Matrix 管理
+  1) 查看当前状态 / 账号密码
+  2) 修改用户名
+  3) 修改密码
+  4) 修改面板端口
+  5) 重启面板服务
+  6) 查看面板日志
+  7) 查看节点实时日志
+  8) 升级到最新版本
+  9) 卸载
+  0) 退出
+```
+
+也可以直接下命令，适合脚本化：
+
+```bash
+sm --show-pass              # 打印当前用户名和密码（忘记密码时用）
+sm --set-user ops           # 改用户名
+sm --set-pass 'NewPass123'  # 改密码（留空则自动生成 20 位）
+```
+
+改完账号密码会自动重启服务。如果一台机器上装了多个面板，`sm` 只会操作自己那份安装对应的服务，不会误重启别的。
+
 ### 手动安装
 
 ```bash
@@ -63,6 +95,16 @@ cd s-matrix-backend && go build -o /usr/local/bin/smatrix ./cmd/server
 ---
 
 ## 核心特性
+
+### 一个节点出错，不会拖垮整台机器
+
+配置在替换前先跑 `sing-box check`：校验不通过就拒绝写入，正在运行的 core 保持不动。
+
+早期版本有个真实事故：一键 Hysteria2 生成的节点没带证书，`sing-box` 直接报 `TLS required` 拒绝启动 —— 结果新建一个坏节点，把整台上所有正常节点一起带下线。现在：
+
+- Hysteria2 / AnyTLS / TUIC / Naive 一律强制带证书，缺证书在生成阶段就报错
+- 写配置前先 `check`，失败则保留旧配置与运行中的进程
+- 启动时若发现磁盘上的配置被新版本 core 拒绝，会自动按数据库重建并修复
 
 ### 一键建节点
 
