@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,7 +12,21 @@ import (
 	"s-matrix/models"
 )
 
+// version is stamped at build time (-X main.version=...).
+var version = "dev"
+
 func main() {
+	for _, a := range os.Args[1:] {
+		switch a {
+		case "--version", "-version", "-v", "version":
+			fmt.Printf("smatrix %s\n", version)
+			return
+		case "--help", "-h", "help":
+			fmt.Println("smatrix - sing-box panel\n\nUsage: smatrix [--version]\nConfiguration is read from SMATRIX_* environment variables.")
+			return
+		}
+	}
+
 	dbPath := env("SMATRIX_DB", "s-matrix.db")
 	addr := env("SMATRIX_ADDR", "127.0.0.1:19088")
 	configPath := env("SMATRIX_CONFIG", "./config.json")

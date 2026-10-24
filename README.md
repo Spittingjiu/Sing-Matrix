@@ -1,189 +1,231 @@
-# Sing-Matrix
+# S-Matrix
 
-Sing-Matrix（S-Matrix）是一个 Go-only 的 sing-box 可视化管理面板，用来在单机上创建、编译、运行和分享 sing-box 入站节点。它把常见代理节点的参数、订阅链接、二维码、运行状态和 sing-box Core 版本管理收进一个轻量 Web UI，不依赖 Node/Vite/Vue 构建链路。
+> 一个二进制、一个面板，把 sing-box 从「手写 JSON + 手动重启 + 手动拼链接」变成点几下就完事。
 
-项目目标很直接：让 sing-box 的日常运维从“手写 JSON + 手动重启 + 手动拼分享链接”变成“面板创建/编辑 + 自动编译配置 + 自动重启 + 直接复制订阅”。
+S-Matrix（Sing-Matrix）是 sing-box 的单机可视化管理面板：Go 后端 + 内嵌前端，无 Node、无数据库服务、无外部依赖。创建节点、签发证书、生成订阅、查看日志、切换内核版本，全部在一个页面里完成。
 
-## 当前能力
+```
+浏览器 ──► S-Matrix (Go, 内嵌 UI) ──► sing-box core ──► 节点端口
+                    │
+                    └── Let's Encrypt (HTTP-01) ──► 节点证书
+```
 
-- 登录鉴权：默认账号密码 `admin / admin`，支持面板内修改密码。
-- 节点管理：新增、编辑、启停、删除、搜索入站节点。
-- 一键创建：一键 REALITY、一键 Hysteria2，自动选端口、生成密钥/密码、写配置并重启 sing-box。
-- 多协议入站：REALITY/VLESS、Hysteria2、Hysteria v1、TUIC、Naive、ShadowTLS、AnyTLS、VMess、Trojan、Shadowsocks、SOCKS5、HTTP。
-- 配置编译：把面板节点转换成 sing-box config，写入配置文件并重启 sing-box。
-- 分享与订阅：为节点生成分享链接、二维码和订阅地址；提供发现接口方便外部订阅系统对接。
-- 运行状态：显示 CPU、内存、sing-box 运行状态和当前 Core 版本。
-- 日志终端：通过 WebSocket 实时查看 sing-box 日志。
-- Core 管理：检测稳定版/Alpha 版 sing-box release，并支持切换到稳定版、Alpha 或指定版本。
-- 纯 Go Web UI：HTML/CSS/JS 通过 Go embed 内置在后端里，部署时只需要一个二进制和 sing-box。
+---
 
-## 适合谁用
+## 一键安装
 
-Sing-Matrix 适合：
+```bash
+curl -fsSL https://raw.githubusercontent.com/Spittingjiu/Sing-Matrix/main/install.sh | sudo bash
+```
 
-- 已经在 VPS 上运行 sing-box，希望减少手写配置的人。
-- 需要快速创建 REALITY/HY2 节点并生成订阅链接的人。
-- 想把 sing-box 节点能力接入外部订阅系统、面板或自动化工具的人。
-- 希望用 systemd 直接管理单机代理服务，而不是引入大型前后端栈的人。
+装完会直接打印访问地址和随机生成的面板密码。脚本自动完成：
 
-它不是一个多租户商业面板，也不是传统 x-ui 的完整替代品。当前重点是单机 sing-box 编排、节点生成、订阅输出和运维可视化。
+- 安装依赖、按架构下载 S-Matrix 二进制
+- 若没有 sing-box，自动安装最新稳定版 core
+- 生成面板账号（随机强密码）与 JWT 密钥
+- 写好 systemd 服务并启动，数据放在 `/opt/sing-matrix/data`
 
-## 架构
+### 常用参数
 
-- 后端：Go、Gin、SQLite、GORM、WebSocket。
-- 前端：原生 HTML/CSS/JS，通过 Go embed 打包。
-- Core：本机 `sing-box` 二进制。
-- 运行方式：后端管理配置文件和 sing-box 进程，推荐由 systemd 托管。
+```bash
+# 换端口 / 换安装目录
+curl -fsSL .../install.sh | sudo bash -s -- --port 8080 --dir /srv/smatrix
 
-主要目录：
+# 前面有 nginx/Caddy：只监听 127.0.0.1，并打印反代片段
+curl -fsSL .../install.sh | sudo bash -s -- --behind-proxy
 
-- `s-matrix-backend/`：主后端、API、Web UI、sing-box 编译器。
-- `s-matrix-backend/api/web/`：内置 Web UI 静态资源。
-- `s-matrix-backend/core/singbox/`：配置生成、端口选择、进程管理。
-- `scripts/`：发布构建、安装脚本、systemd 模板。
-- `deploy/`：Docker、Nginx、systemd 示例。
-- `docs/`：API、部署和产品设计文档。
+# 只要面板，不用它管 sing-box
+curl -fsSL .../install.sh | sudo bash -s -- --no-singbox
 
-## 快速开始
+# 升级 / 卸载 / 查看状态
+curl -fsSL .../install.sh | sudo bash -s -- --upgrade
+curl -fsSL .../install.sh | sudo bash -s -- --uninstall          # 保留数据
+curl -fsSL .../install.sh | sudo bash -s -- --uninstall --purge  # 连数据一起删
+curl -fsSL .../install.sh | sudo bash -s -- --status
+```
 
-### 本地开发运行
+参数也可以用环境变量传：`SMATRIX_PORT`、`SMATRIX_LISTEN`、`SMATRIX_INSTALL_DIR`、`SMATRIX_VERSION`、`SMATRIX_WITH_SINGBOX`、`SMATRIX_SYSTEMD`、`SMATRIX_WEBROOT`。
 
-需要 Go 1.21+ 和 sing-box。
+### 手动安装
 
-1. 进入后端目录：
-   `cd s-matrix-backend`
-2. 下载依赖：
-   `go mod tidy`
-3. 启动：
-   `go run ./cmd/server`
-4. 打开：
-   `http://127.0.0.1:19088`
-5. 默认登录：
-   `admin / admin`
+```bash
+# 从 release 取二进制
+curl -fsSLO https://github.com/Spittingjiu/Sing-Matrix/releases/latest/download/smatrix-linux-amd64
+install -m755 smatrix-linux-amd64 /usr/local/bin/smatrix
+smatrix --version
+```
 
-默认启动参数：
+```bash
+# 或者从源码构建（需要 Go 1.21+，CGO 用于 SQLite）
+cd s-matrix-backend && go build -o /usr/local/bin/smatrix ./cmd/server
+```
 
-- 监听地址：`127.0.0.1:19088`
-- 数据库：`s-matrix.db`
-- sing-box 配置：`./config.json`
-- sing-box 日志：`./singbox.log`
-- sing-box 二进制：`sing-box`
+---
 
-### 构建发布包
+## 核心特性
 
-在仓库根目录执行：
+### 一键建节点
 
-`./scripts/build-release.sh`
+「新建节点」菜单里选一个，填个备注就完事：
 
-构建产物会放到 `scripts/s-matrix`，可配合 `scripts/install.sh` 安装。
+| 入口 | 生成内容 |
+|---|---|
+| **AnyTLS · 域名证书** | 校验域名 → 签发 Let's Encrypt → 建 AnyTLS 节点（链接不带 `insecure`） |
+| **AnyTLS · 自签证书** | 自动生成 ECDSA 自签证书 → 建节点（链接带 `insecure=1`） |
+| **REALITY** | 自动生成密钥对 / shortId，伪装 `www.microsoft.com` |
+| **Hysteria2** | 自动生成密码，带 masquerade 伪装 |
+| **自定义参数** | 12 种协议全参数表单（VLESS / VMess / Trojan / SS / TUIC / Naive / ShadowTLS / AnyTLS / HY2 / Hysteria / SOCKS / HTTP） |
 
-### 一键安装脚本
+### 自带域名 = 自带证书
 
-安装脚本要求 root 权限，会：
+面板**不保存任何 DNS 厂商的凭据**，也不需要你提供 API Token。流程是标准的 HTTP-01：
 
-- 安装或检测 `/usr/local/bin/sing-box`。
-- 安装 `s-matrix` 到 `/usr/local/bin/s-matrix`。
-- 创建 `/etc/s-matrix/` 配置目录。
-- 安装并启动 `s-matrix.service`。
+1. 用户把自己的域名 A 记录指向服务器（DNS-only，别开 CDN 代理）
+2. 面板里点「校验域名」→ 解析结果与本机地址比对
+3. 匹配则签发 Let's Encrypt 证书，证书落盘后可被任意 TLS 协议复用
 
-执行：
+校验失败会直接说清楚差在哪：
 
-`sudo ./scripts/install.sh`
+```
+域名解析到 172.66.147.243, 104.20.23.154
+与本机地址 23.80.81.106 不一致；请先把 A 记录指向本机（并关闭 CDN 代理）
+```
 
-安装后默认访问：
+端口 80 空闲时面板自己绑定应答（standalone）；80 被 nginx/Caddy 占用时走 webroot，由前置代理提供 `/.well-known/acme-challenge/`。证书每 12 小时自检，30 天内到期自动续签。
 
-`http://服务器IP:19088`
+### 面板自托管 HTTPS（可选）
 
-默认登录：`admin / admin`。第一次登录后请立刻修改密码。
+独立部署不想装反代时，直接让面板自己收发 HTTPS：
+
+```bash
+SMATRIX_HTTPS_ADDR=:443   # 用已签发的证书按 SNI 提供服务
+SMATRIX_HTTP_ADDR=:80     # 应答 ACME 校验，其余 301 跳 HTTPS
+```
+
+签发成功后前端会自动跳到 `https://域名`。
+
+### 分享与订阅
+
+- 每个节点一键出分享链接 + 二维码（二维码本地渲染，不经过任何第三方服务）
+- 全局订阅地址 `GET /api/v1/sub/:token`，Base64 明文列表
+- 发现接口 `/api/v1/discover` 方便外部订阅系统对接
+
+### 运维
+
+- **运行状态**：sing-box 状态、CPU、内存、内核版本，3 秒刷新
+- **实时日志**：WebSocket 终端，按 ERROR/WARN/INFO 着色
+- **内核管理**：检测最新稳定版 / Alpha，一键切换版本
+- **一键对接 subgo**：把面板注册成下游订阅源（自动带地址与永久 Token，支持握手签名）
+
+---
+
+## 支持矩阵
+
+| 能力 | 说明 |
+|---|---|
+| 系统 | Linux（Debian / Ubuntu / Alpine / RHEL 系），amd64 / arm64 |
+| sing-box | 1.10+（安装脚本默认拉最新稳定版） |
+| 浏览器 | 现代浏览器；移动端自适应 |
+| 数据库 | SQLite 单文件，无需额外服务 |
+| 依赖 | 无。一个二进制 + sing-box |
+
+---
+
+## 部署形态
+
+**单机直连（最省事）**
+
+```
+面板 :19088 ── sing-box 节点 :随机端口
+```
+
+**反代 + 真证书**
+
+```
+nginx/Caddy :443 ──► 面板 127.0.0.1:19088
+                 └─► /.well-known/acme-challenge/ (webroot)
+```
+
+**面板自带 TLS**
+
+```
+面板 :443 (证书) + :80 (ACME/跳转)
+```
+
+---
 
 ## 配置项
 
-后端通过环境变量配置：
+全部通过环境变量，systemd unit 里已经写好：
 
-- `SMATRIX_ADDR`：后端监听地址，默认 `127.0.0.1:19088`。
-- `SMATRIX_DB`：SQLite 数据库路径，默认 `s-matrix.db`。
-- `SMATRIX_CONFIG`：sing-box 配置文件路径，默认 `./config.json`。
-- `SMATRIX_SINGBOX_LOG`：sing-box 日志路径，默认 `./singbox.log`。
-- `SMATRIX_SINGBOX_BIN`：sing-box 二进制路径，默认 `sing-box`。
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `SMATRIX_ADDR` | `127.0.0.1:19088` | 面板监听地址 |
+| `SMATRIX_DB` | `./s-matrix.db` | SQLite 路径 |
+| `SMATRIX_CONFIG` | `./config.json` | 生成的 sing-box 配置 |
+| `SMATRIX_DATA_DIR` | `./data` | 数据目录（账号、密钥、ACME 记录） |
+| `SMATRIX_CERT_DIR` | `./certs` | 证书目录 |
+| `SMATRIX_SINGBOX_BIN` | `sing-box` | core 路径 |
+| `SMATRIX_SINGBOX_LOG` | `./singbox.log` | core 日志 |
+| `SMATRIX_ACME_WEBROOT` | `./acme-webroot` | HTTP-01 webroot |
+| `SMATRIX_ACME_EMAIL` | 空 | ACME 联系邮箱（可留空） |
+| `SMATRIX_HTTPS_ADDR` | 空 | 设了才启用内置 HTTPS |
+| `SMATRIX_HTTP_ADDR` | 空 | 内置 80 端口（ACME + 跳转） |
+| `SMATRIX_JWT_SECRET` | 自动生成 | 登录令牌签名密钥 |
 
-注意：部分旧部署模板里可能出现 `SMATRIX_SINGBOX_CONFIG` 或 `SMATRIX_GENERATED_CONFIG`，当前主程序实际读取的是 `SMATRIX_CONFIG`。如果你改 systemd，请以 `s-matrix-backend/cmd/server/main.go` 为准。
+---
 
-## 常用 API
+## API 速览
 
-基础路径：`/api/v1`
+登录后 `Authorization: Bearer <token>`：
 
-公开接口：
+```
+GET  /api/v1/system/status          # 运行状态
+GET  /api/v1/inbounds               # 节点列表
+POST /api/v1/inbounds/:id/toggle    # 启停
+GET  /api/v1/inbounds/:id/links     # 分享链接
+POST /api/v1/quick/anytls           # 一键 AnyTLS（自签）
+POST /api/v1/quick/anytls-domain    # 一键 AnyTLS（域名证书）
+POST /api/v1/quick/reality          # 一键 REALITY
+POST /api/v1/quick/hy2              # 一键 Hysteria2
+GET  /api/v1/domain/check?domain=   # 校验域名是否指向本机
+POST /api/v1/domain/issue           # 签发证书
+GET  /api/v1/domain/status          # ACME 状态（本机 IP / 校验方式）
+POST /api/v1/panel/connect-sub      # 一键对接 subgo
+```
 
-- `POST /login`：登录并获取 JWT。
-- `POST /token`：登录兼容入口。
-- `GET /auth/challenge`：登录挑战信息。
-- `GET /sub/:token`：订阅输出。
-- `GET /discover`：对接发现接口。
+完整接口见 [`docs/API.md`](docs/API.md)。
 
-需要 JWT 的接口：
+---
 
-- `GET /system/status`：系统与 sing-box 状态。
-- `GET /system/singbox/version`：检测 sing-box 版本。
-- `POST /system/singbox/switch`：切换 sing-box Core 版本。
-- `POST /system/change-password`：修改面板密码。
-- `GET /system/gen-reality-keypair`：生成 REALITY keypair。
-- `GET /inbounds`：列出节点。
-- `POST /inbounds/:id/toggle`：启停节点。
-- `PUT /inbounds/:id/rename`：重命名节点。
-- `DELETE /inbounds/:id`：删除节点。
-- `GET /inbounds/:id/links`：生成单节点链接。
-- `POST /quick/reality`：一键创建 REALITY。
-- `POST /quick/hy2`：一键创建 Hysteria2。
-- `POST /singbox/compile`：编译并应用配置。
-- `GET /singbox/share-links`：获取全部分享链接。
-- `GET /logs/ws`：日志 WebSocket。
+## AI 增强开发
 
-更多细节见 `docs/API.md`。
+项目大量使用 AI 辅助编码，但**每个改动都必须通过真实验证**：
 
-## 推荐生产部署
+- 认证集成测试（`go test ./...`）
+- 真实机器上起服务，用 mihomo 客户端实际拨号验证节点可用
+- 证书类改动必须真实签发并由客户端**严格校验**连通
+- 前端改动在 headless 浏览器里做 DOM/布局断言，不只看「页面能打开」
 
-生产环境建议：
+不追求「看起来能跑」，只承认「跑通了」。
 
-- `SMATRIX_ADDR` 监听 `127.0.0.1:19088`。
-- 前面放 Nginx/Caddy，负责 HTTPS、访问控制和日志。
-- 用 systemd 管理 `s-matrix`。
-- sing-box 配置、数据库和日志放到专用目录，例如 `/etc/s-matrix/` 或 `/opt/sing-matrix/data/`。
-- 面板不要裸奔公网；至少启用 HTTPS、强密码和防爆破策略。
+---
 
-Nginx 示例见：`deploy/nginx.example.conf`。
+## 目录结构
 
-systemd 示例见：`scripts/s-matrix.service` 或 `deploy/sing-matrix.service`。
+```
+s-matrix-backend/       Go 后端 + 内嵌前端
+  api/                  路由与 HTTP handler
+  core/singbox/         配置编译、端口选择、进程管理、自签证书
+  core/acme/            HTTP-01 签发、证书续期、内置 TLS 监听
+  api/web/              原生 HTML/CSS/JS（embed 进二进制）
+install.sh              一键安装脚本
+scripts/build-release.sh 构建 amd64/arm64 发布件
+docs/                   API、部署、产品说明
+```
 
-Docker Compose 示例见：`deploy/docker-compose.yml`。当前 Docker 更适合开发/演示；生产更推荐 systemd，因为需要更清晰地控制 sing-box 进程权限和配置文件权限。
+---
 
-## 安全提醒
-
-Sing-Matrix 可以写 sing-box 配置、启动/停止 sing-box、切换 Core 版本，也能生成可连接节点的订阅链接。部署到公网前务必注意：
-
-- 修改默认密码。
-- 使用 HTTPS。
-- 不要把数据库、配置、日志目录设成可公开访问。
-- 反代层限制暴力登录和异常请求。
-- 给 systemd 服务配置最小权限，不要无必要地用高权限暴露面板。
-- 妥善保管订阅链接和 JWT；它们能暴露节点连接信息。
-
-## 开发与测试
-
-常用命令：
-
-- 后端测试：`cd s-matrix-backend && go test ./...`
-- 本地运行：`cd s-matrix-backend && go run ./cmd/server`
-- 构建二进制：`go build -o scripts/s-matrix ./s-matrix-backend/cmd/server`
-
-## Roadmap
-
-- 更完整的拓扑编排画布。
-- 配置 diff、回滚和操作审计。
-- 更细的权限模型和登录安全策略。
-- 更完整的订阅格式适配。
-- sing-box metrics / Clash API / 日志解析的实时流量面板。
-- 多实例或多机器管理能力。
-
-## License
+## 许可
 
 MIT
