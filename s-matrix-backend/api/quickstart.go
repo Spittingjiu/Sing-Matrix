@@ -290,19 +290,16 @@ func randomUUIDLike() string {
 	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
 }
 
-// QuickAnyTLSDomainHandler is the "one-click domain" flow: point a real domain
-// at this host, issue a Let's Encrypt certificate over DNS-01, then create the
-// AnyTLS inbound with that certificate. The resulting link carries no
-// insecure flag, so clients verify TLS properly.
+// QuickAnyTLSDomainHandler issues a certificate for a domain the operator
+// already pointed at this host, then creates the AnyTLS inbound with it. No DNS
+// provider credentials are involved: the panel proves control over HTTP-01.
 func QuickAnyTLSDomainHandler(dep quickDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Domain    string `json:"domain"`
-			Subdomain string `json:"subdomain"`
-			Zone      string `json:"zone"`
-			IP        string `json:"ip"`
-			Remark    string `json:"remark"`
-			Port      int    `json:"port"`
+			Domain string `json:"domain"`
+			Remark string `json:"remark"`
+			Port   int    `json:"port"`
+			Force  bool   `json:"force"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "bad json"})
@@ -313,41 +310,20 @@ func QuickAnyTLSDomainHandler(dep quickDeps) gin.HandlerFunc {
 			return
 		}
 		domain := strings.ToLower(strings.TrimSpace(req.Domain))
-		if domain == "" {
-			sub := strings.ToLower(strings.TrimSpace(req.Subdomain))
-			zone := strings.ToLower(strings.TrimSpace(req.Zone))
-			if sub != "" && zone != "" {
-				domain = sub + "." + zone
-			}
-		}
 		if domain == "" || !strings.Contains(domain, ".") {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "请填写域名（或子域名 + 后缀）"})
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "请填写完整域名，例如 node1.example.com"})
 			return
 		}
-
-		ip := strings.TrimSpace(req.IP)
-		if ip == "" {
-			ip = acme.DetectPublicIP()
+		v := acme.ValidateDomain(domain, acme.DetectPublicIP())
+		if !v.OK && !req.Force {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": v.Reason, "validation": v})
+			return
 		}
-		if ip == "" {
-			ip = req.IP
-		}
-		dnsChanged := false
-		if ip != "" {
-			rec, changed, err := acme.NewDNS(cfToken(dep.DataDir)).EnsureARecord(domain, ip)
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "DNS 记录写入失败: " + err.Error()})
-				return
-			}
-			dnsChanged = changed || rec.ID == ""
-		}
-
 		cert, err := dep.ACME.Obtain(domain)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "证书申请失败: " + err.Error(), "dns_updated": dnsChanged, "ip": ip})
+			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "证书申请失败: " + err.Error(), "validation": v})
 			return
 		}
-
 		port := singbox.PickAvailablePort(req.Port, map[int]bool{})
 		if port == 0 {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "no available port"})
@@ -365,19 +341,20 @@ func QuickAnyTLSDomainHandler(dep quickDeps) gin.HandlerFunc {
 			"sni":              domain,
 			"certificate_path": cert.CertPath,
 			"key_path":         cert.KeyPath,
-			"acme":             true,
 		})
 		password, _ := topo.Nodes[0].Data["password"].(string)
 		own := fmt.Sprintf("anytls://%s@%s:%d?sni=%s#%s",
-			url.QueryEscape(password), publicHost(c), port, url.QueryEscape(domain), url.QueryEscape(remark))
+			url.QueryEscape(password), domain, port, url.QueryEscape(domain), url.QueryEscape(remark))
+		st := dep.ACME.Status()
 		respondQuick(c, dep, topo, "anytls", port, gin.H{
-			"domain":       domain,
-			"ip":           ip,
-			"dns_updated":  dnsChanged,
-			"cert_path":    cert.CertPath,
-			"cert_expires": cert.NotAfter.Format(time.RFC3339),
-			"acme":         true,
-			"link":         own,
+			"domain":        domain,
+			"cert_path":     cert.CertPath,
+			"cert_expires":  cert.NotAfter.Format(time.RFC3339),
+			"acme":          true,
+			"link":          own,
+			"mode":          st.Mode,
+			"auto_redirect": st.AutoRedirect,
+			"https_url":     "https://" + domain,
 		})
 	}
 }

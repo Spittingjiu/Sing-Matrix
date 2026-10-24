@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/certificate"
-	"github.com/go-acme/lego/v4/challenge/dns01"
+	"github.com/go-acme/lego/v4/challenge"
+	"github.com/go-acme/lego/v4/challenge/http01"
 	"github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
 )
 
@@ -33,6 +33,18 @@ type IssuedCert struct {
 	IssuedAt time.Time `json:"issued_at"`
 }
 
+// Status is what the UI shows about the local ACME setup.
+type Status struct {
+	ServerIP      string `json:"server_ip"`
+	Mode          string `json:"mode"`
+	Webroot       string `json:"webroot"`
+	Email         string `json:"email"`
+	CertDir       string `json:"cert_dir"`
+	Port80Free    bool   `json:"port80_free"`
+	AutoRedirect  bool   `json:"auto_redirect"`
+	HTTPSListen   string `json:"https_listen"`
+}
+
 type acmeUser struct {
 	email string
 	key   crypto.PrivateKey
@@ -43,33 +55,59 @@ func (u *acmeUser) GetEmail() string                        { return u.email }
 func (u *acmeUser) GetRegistration() *registration.Resource { return u.reg }
 func (u *acmeUser) GetPrivateKey() crypto.PrivateKey        { return u.key }
 
-// Manager issues and renews certificates through Let's Encrypt using the
-// Cloudflare DNS-01 challenge. It keeps the ACME account key and its own
-// metadata under DataDir so restarts do not re-register.
+// Manager issues and renews certificates over HTTP-01. It never needs a DNS
+// provider credential: the operator points the domain at this host and the panel
+// proves control by serving a token on port 80.
 type Manager struct {
 	CertDir string
 	DataDir string
 	Email   string
-	TokenFn func() string
+	Webroot string
+	// HTTPSListen mirrors SMATRIX_HTTPS_ADDR so the UI can tell the user whether
+	// the panel itself can serve the new domain over HTTPS.
+	HTTPSListen string
 
-	mu sync.Mutex
+	mu      sync.Mutex
+	account *acmeUser
 }
 
-func NewManager(certDir, dataDir, email string, tokenFn func() string) *Manager {
+func NewManager(certDir, dataDir, email, webroot string) *Manager {
 	if certDir == "" {
 		certDir = "./certs"
 	}
 	if dataDir == "" {
 		dataDir = "./data"
 	}
-	if strings.TrimSpace(email) == "" {
-		email = "postmaster@example.com"
-	}
-	return &Manager{CertDir: certDir, DataDir: dataDir, Email: email, TokenFn: tokenFn}
+	return &Manager{CertDir: certDir, DataDir: dataDir, Email: email, Webroot: webroot}
 }
 
 func (m *Manager) metaPath() string    { return filepath.Join(m.DataDir, "acme_certs.json") }
 func (m *Manager) accountPath() string { return filepath.Join(m.DataDir, "acme_account.key") }
+
+// Port80Free reports whether the panel could bind :80 itself.
+func (m *Manager) Port80Free() bool { return CanBind(":80") }
+
+// ChallengeMode names the HTTP-01 strategy in use.
+func (m *Manager) ChallengeMode() string {
+	if m.Port80Free() {
+		return "standalone"
+	}
+	return "webroot"
+}
+
+// Status summarises the setup for the UI.
+func (m *Manager) Status() Status {
+	return Status{
+		ServerIP:     DetectPublicIP(),
+		Mode:         m.ChallengeMode(),
+		Webroot:      m.Webroot,
+		Email:        m.Email,
+		CertDir:      m.CertDir,
+		Port80Free:   m.Port80Free(),
+		AutoRedirect: m.HTTPSListen != "",
+		HTTPSListen:  m.HTTPSListen,
+	}
+}
 
 func (m *Manager) loadAccountKey() (*ecdsa.PrivateKey, error) {
 	if raw, err := os.ReadFile(m.accountPath()); err == nil {
@@ -79,8 +117,7 @@ func (m *Manager) loadAccountKey() (*ecdsa.PrivateKey, error) {
 			case "EC PRIVATE KEY":
 				return x509.ParseECPrivateKey(block.Bytes)
 			case "PRIVATE KEY":
-				k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-				if err == nil {
+				if k, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
 					if ec, ok := k.(*ecdsa.PrivateKey); ok {
 						return ec, nil
 					}
@@ -106,8 +143,15 @@ func (m *Manager) loadAccountKey() (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
-// Obtain issues (or re-issues) a certificate for domain. The A record must
-// already point at this host; callers usually ensure it first.
+// emailFor derives a contact address when the operator did not configure one.
+func (m *Manager) emailFor(domain string) string {
+	if e := strings.TrimSpace(m.Email); e != "" {
+		return e
+	}
+	return "acme@" + domain
+}
+
+// Obtain issues (or re-issues) a certificate for domain over HTTP-01.
 func (m *Manager) Obtain(domain string) (IssuedCert, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -116,16 +160,12 @@ func (m *Manager) Obtain(domain string) (IssuedCert, error) {
 	if domain == "" || !strings.Contains(domain, ".") {
 		return IssuedCert{}, fmt.Errorf("invalid domain: %q", domain)
 	}
-	token := strings.TrimSpace(m.TokenFn())
-	if token == "" {
-		return IssuedCert{}, errors.New("cloudflare token 未配置，无法完成 DNS-01 验证")
-	}
 
 	key, err := m.loadAccountKey()
 	if err != nil {
 		return IssuedCert{}, fmt.Errorf("load acme account key: %w", err)
 	}
-	user := &acmeUser{email: m.Email, key: key}
+	user := &acmeUser{email: m.emailFor(domain), key: key}
 
 	cfg := lego.NewConfig(user)
 	cfg.CADirURL = lego.LEDirectoryProduction
@@ -134,17 +174,27 @@ func (m *Manager) Obtain(domain string) (IssuedCert, error) {
 		return IssuedCert{}, fmt.Errorf("acme client: %w", err)
 	}
 
-	cfCfg := cloudflare.NewDefaultConfig()
-	cfCfg.AuthToken = token
-	cfCfg.PropagationTimeout = 2 * time.Minute
-	cfCfg.PollingInterval = 4 * time.Second
-	provider, err := cloudflare.NewDNSProviderConfig(cfCfg)
-	if err != nil {
-		return IssuedCert{}, fmt.Errorf("cloudflare dns provider: %w", err)
+	var provider challenge.Provider
+	mode := "webroot"
+	if m.Port80Free() {
+		// Nothing else owns :80, so the panel can answer the challenge directly.
+		if err := client.Challenge.SetHTTP01Provider(http01.NewProviderServer("", "80")); err != nil {
+			return IssuedCert{}, fmt.Errorf("set http01 provider: %w", err)
+		}
+		mode = "standalone"
+	} else {
+		if strings.TrimSpace(m.Webroot) == "" {
+			return IssuedCert{}, errors.New("80 端口被占用且未配置 webroot，无法完成 HTTP-01 校验")
+		}
+		provider = &WebrootProvider{Dir: m.Webroot}
+		if err := os.MkdirAll(filepath.Join(m.Webroot, ".well-known", "acme-challenge"), 0o755); err != nil {
+			return IssuedCert{}, fmt.Errorf("prepare webroot: %w", err)
+		}
+		if err := client.Challenge.SetHTTP01Provider(provider); err != nil {
+			return IssuedCert{}, fmt.Errorf("set http01 provider: %w", err)
+		}
 	}
-	if err := client.Challenge.SetDNS01Provider(provider, dns01.AddRecursiveNameservers([]string{"1.1.1.1:53", "8.8.8.8:53"})); err != nil {
-		return IssuedCert{}, fmt.Errorf("set dns01 provider: %w", err)
-	}
+	log.Printf("[acme] issuing %s via %s", domain, mode)
 
 	reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 	if err != nil {
@@ -182,13 +232,7 @@ func (m *Manager) persist(domain string, res *certificate.Resource) (IssuedCert,
 			notAfter = cert.NotAfter
 		}
 	}
-	entry := IssuedCert{
-		Domain:   domain,
-		CertPath: certPath,
-		KeyPath:  keyPath,
-		NotAfter: notAfter,
-		IssuedAt: now,
-	}
+	entry := IssuedCert{Domain: domain, CertPath: certPath, KeyPath: keyPath, NotAfter: notAfter, IssuedAt: now}
 	meta, _ := m.LoadMeta()
 	meta[domain] = entry
 	if err := m.SaveMeta(meta); err != nil {
@@ -229,7 +273,7 @@ func (m *Manager) SaveMeta(meta map[string]IssuedCert) error {
 	return os.Rename(tmp, m.metaPath())
 }
 
-// RenewAll re-issues certificates that expire within 30 days.
+// RenewAll re-issues certificates that expire within window.
 func (m *Manager) RenewAll(window time.Duration) []string {
 	meta, err := m.LoadMeta()
 	if err != nil {

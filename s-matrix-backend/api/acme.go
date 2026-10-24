@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,139 +13,117 @@ import (
 // ACMEDeps carries what the domain/certificate endpoints need.
 type ACMEDeps struct {
 	Manager *acme.Manager
-	DataDir string
 }
 
-func cfTokenPath(dataDir string) string {
-	return filepath.Join(dataDir, "cf_token")
+// acmeEmailPath stores the optional contact address an operator configures.
+func acmeEmailPath(m *acme.Manager) string {
+	return m.DataDir + "/acme_email"
 }
 
-// cfToken resolves the Cloudflare token from the environment first, then from
-// the file the panel writes when the operator pastes one in the UI.
-func cfToken(dataDir string) string {
-	if v := strings.TrimSpace(os.Getenv("SMATRIX_CF_TOKEN")); v != "" {
-		return v
-	}
-	raw, err := os.ReadFile(cfTokenPath(dataDir))
+// loadEmail prefs the configured contact address, if any.
+func loadEmail(m *acme.Manager) string {
+	raw, err := os.ReadFile(acmeEmailPath(m))
 	if err != nil {
-		return ""
+		return m.Email
 	}
 	return strings.TrimSpace(string(raw))
 }
 
-// ACMEZonesHandler reports the token state plus the zones it can manage.
-func ACMEZonesHandler(dep ACMEDeps) gin.HandlerFunc {
+// ACMEStatusHandler reports how this installation can obtain certificates.
+// There are no provider credentials involved: HTTP-01 only needs port 80 to
+// reach this host under the requested name.
+func ACMEStatusHandler(dep ACMEDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token := cfToken(dep.DataDir)
-		out := gin.H{
-			"ok":            true,
-			"token_set":     token != "",
-			"server_ip":     acme.DetectPublicIP(),
-			"cert_dir":      dep.Manager.CertDir,
-			"acme_email":    dep.Manager.Email,
-			"zones":         []acme.Zone{},
-			"cloudflare_ok": false,
+		st := dep.Manager.Status()
+		if e := loadEmail(dep.Manager); e != "" {
+			st.Email = e
 		}
-		if token == "" {
-			c.JSON(http.StatusOK, out)
-			return
-		}
-		zones, err := acme.NewDNS(token).Zones()
-		if err != nil {
-			out["error"] = err.Error()
-			c.JSON(http.StatusOK, out)
-			return
-		}
-		out["zones"] = zones
-		out["cloudflare_ok"] = true
-		c.JSON(http.StatusOK, out)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "status": st})
 	}
 }
 
-// ACMETokenHandler stores the Cloudflare API token used for DNS-01.
-func ACMETokenHandler(dep ACMEDeps) gin.HandlerFunc {
+// ACMEEmailHandler stores an optional ACME contact address.
+func ACMEEmailHandler(dep ACMEDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Token string `json:"token"`
+			Email string `json:"email"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "bad json"})
 			return
 		}
-		token := strings.TrimSpace(req.Token)
-		if token == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "token required"})
+		email := strings.TrimSpace(req.Email)
+		if email != "" && !strings.Contains(email, "@") {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "邮箱格式不正确"})
 			return
 		}
-		zones, err := acme.NewDNS(token).Zones()
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "token 校验失败: " + err.Error()})
-			return
+		if email == "" {
+			_ = os.Remove(acmeEmailPath(dep.Manager))
+		} else {
+			if err := os.WriteFile(acmeEmailPath(dep.Manager), []byte(email), 0o600); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+				return
+			}
 		}
-		if err := os.MkdirAll(dep.DataDir, 0o755); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-			return
-		}
-		if err := os.WriteFile(cfTokenPath(dep.DataDir), []byte(token), 0o600); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "zones": zones, "zone_count": len(zones)})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "email": email})
 	}
 }
 
-// ACMECertHandler issues a Let's Encrypt certificate over Cloudflare DNS-01 and
-// (optionally) points the name at this host first.
+// ACMECheckHandler validates that a domain already points at this host.
+// Nothing is issued here; the UI uses it to give a precise reason before the
+// operator waits through an ACME order.
+func ACMECheckHandler(dep ACMEDeps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		domain := strings.TrimSpace(c.Query("domain"))
+		if domain == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "domain required"})
+			return
+		}
+		v := acme.ValidateDomain(domain, acme.DetectPublicIP())
+		c.JSON(http.StatusOK, gin.H{"ok": v.OK, "validation": v, "mode": dep.Manager.ChallengeMode()})
+	}
+}
+
+// ACMECertHandler issues a certificate once the domain is verified.
 func ACMECertHandler(dep ACMEDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Domain  string `json:"domain"`
-			IP      string `json:"ip"`
-			SkipDNS bool   `json:"skip_dns"`
+			Domain string `json:"domain"`
+			Force  bool   `json:"force"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "bad json"})
 			return
 		}
 		domain := strings.ToLower(strings.TrimSpace(req.Domain))
-		if domain == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "domain required"})
+		if domain == "" || !strings.Contains(domain, ".") {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "请填写完整域名，例如 node1.example.com"})
 			return
 		}
-		ip := strings.TrimSpace(req.IP)
-		dns := acme.NewDNS(cfToken(dep.DataDir))
-		dnsUpdated := false
-		if !req.SkipDNS {
-			if ip == "" {
-				ip = acme.DetectPublicIP()
-			}
-			if ip == "" {
-				c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "无法探测本机公网 IP，请手动填写"})
-				return
-			}
-			rec, changed, err := dns.EnsureARecord(domain, ip)
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "DNS 记录写入失败: " + err.Error()})
-				return
-			}
-			dnsUpdated = changed
-			if rec.Name == "" {
-				dnsUpdated = true
-			}
+		v := acme.ValidateDomain(domain, acme.DetectPublicIP())
+		if !v.OK && !req.Force {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": v.Reason, "validation": v})
+			return
+		}
+		if dep.Manager.ChallengeMode() == "webroot" && strings.TrimSpace(dep.Manager.Webroot) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "80 端口被占用，且未配置 ACME webroot 目录"})
+			return
 		}
 		cert, err := dep.Manager.Obtain(domain)
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error(), "dns_updated": dnsUpdated, "ip": ip})
+			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": err.Error(), "validation": v})
 			return
 		}
+		st := dep.Manager.Status()
 		c.JSON(http.StatusOK, gin.H{
 			"ok":          true,
 			"domain":      cert.Domain,
 			"cert_path":   cert.CertPath,
 			"key_path":    cert.KeyPath,
 			"not_after":   cert.NotAfter.Format(time.RFC3339),
-			"ip":          ip,
-			"dns_updated": dnsUpdated,
+			"https_url":   "https://" + domain,
+			"auto_redirect": st.AutoRedirect,
+			"mode":        st.Mode,
 		})
 	}
 }

@@ -52,9 +52,10 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	secured.POST("/certs/selfsigned", SelfSignedCertHandler(dep.CertDir))
 	secured.POST("/panel/connect-sub", ConnectSubHandler())
 	secured.GET("/panel/token", PanelTokenHandler())
-	acmeDeps := ACMEDeps{Manager: dep.ACME, DataDir: dep.DataDir}
-	secured.GET("/domain/zones", ACMEZonesHandler(acmeDeps))
-	secured.POST("/domain/token", ACMETokenHandler(acmeDeps))
+	acmeDeps := ACMEDeps{Manager: dep.ACME}
+	secured.GET("/domain/status", ACMEStatusHandler(acmeDeps))
+	secured.POST("/domain/email", ACMEEmailHandler(acmeDeps))
+	secured.GET("/domain/check", ACMECheckHandler(acmeDeps))
 	secured.POST("/domain/issue", ACMECertHandler(acmeDeps))
 	secured.GET("/domain/certs", ACMECertListHandler(acmeDeps))
 	secured.POST("/quick/anytls-domain", QuickAnyTLSDomainHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB, CertDir: dep.CertDir, DataDir: dep.DataDir, ACME: dep.ACME}))
