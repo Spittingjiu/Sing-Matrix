@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,7 +17,12 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var jwtSecret = []byte("s-matrix-change-me-development-secret")
+var jwtSecret = func() []byte {
+	if v := strings.TrimSpace(os.Getenv("SMATRIX_JWT_SECRET")); v != "" {
+		return []byte(v)
+	}
+	return []byte("s-matrix-change-me-development-secret")
+}()
 var handshakeMu sync.Mutex
 var handshakeNonces = map[string]int64{}
 

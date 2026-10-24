@@ -20,6 +20,7 @@ type RouterDeps struct {
 	ConfigPath string
 	LogPath    string
 	DB         *gorm.DB
+	CertDir    string
 }
 
 func NewRouter(deps ...RouterDeps) *gin.Engine {
@@ -34,6 +35,7 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	v1.POST("/token", LoginHandler)
 	v1.GET("/auth/challenge", ChallengeHandler)
 	v1.GET("/sub/:token", SubscriptionHandler(dep.ConfigPath))
+	v1.GET("/qr.png", QRHandler())
 	v1.GET("/discover", DiscoveryHandler(dep.ConfigPath))
 	secured := v1.Group("")
 	secured.Use(JWTMiddleware())
@@ -42,6 +44,9 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	secured.GET("/logs/ws", LogsWSHandler(dep.LogPath))
 	secured.POST("/quick/reality", QuickRealityHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB}))
 	secured.POST("/quick/hy2", QuickHY2Handler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB}))
+	secured.POST("/quick/anytls", QuickAnyTLSHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB, CertDir: dep.CertDir}))
+	secured.GET("/certs", ListCertsHandler(dep.CertDir))
+	secured.POST("/certs/selfsigned", SelfSignedCertHandler(dep.CertDir))
 	if dep.DB != nil {
 		secured.GET("/inbounds", ListInboundsHandler(dep.DB))
 		secured.POST("/inbounds/:id/toggle", ToggleInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))

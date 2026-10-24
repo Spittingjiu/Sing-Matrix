@@ -14,6 +14,7 @@ func main() {
 	addr := env("SMATRIX_ADDR", "127.0.0.1:19088")
 	configPath := env("SMATRIX_CONFIG", "./config.json")
 	logPath := env("SMATRIX_SINGBOX_LOG", "./singbox.log")
+	certDir := env("SMATRIX_CERT_DIR", "./certs")
 	singboxBin := env("SMATRIX_SINGBOX_BIN", "sing-box")
 	db, err := models.OpenDatabase(dbPath)
 	if err != nil {
@@ -31,7 +32,7 @@ func main() {
 			log.Printf("sing-box auto-started with %s", configPath)
 		}
 	}
-	if err := api.NewRouter(api.RouterDeps{Manager: manager, ConfigPath: configPath, LogPath: logPath, DB: db}).Run(addr); err != nil {
+	if err := api.NewRouter(api.RouterDeps{Manager: manager, ConfigPath: configPath, LogPath: logPath, DB: db, CertDir: certDir}).Run(addr); err != nil {
 		log.Fatal(err)
 	}
 }

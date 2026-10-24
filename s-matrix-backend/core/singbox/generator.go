@@ -242,10 +242,14 @@ func NewShadowTLSInbound(tag string, port int, password string, serverName strin
 	return Inbound{Type: "shadowtls", Tag: tag, Listen: "::", ListenPort: port, Version: 3, Users: []User{{Name: "default", Password: password}}, Handshake: map[string]interface{}{"server": serverName, "server_port": 443}, StrictMode: strict, WildcardSNI: wildcard}
 }
 
-func NewAnyTLSInbound(tag string, port int, password string, certPath string, keyPath string, padding []string) Inbound {
+func NewAnyTLSInbound(tag string, port int, password string, certPath string, keyPath string, padding []string, serverName string) Inbound {
 	in := Inbound{Type: "anytls", Tag: tag, Listen: "::", ListenPort: port, Users: []User{{Name: "default", Password: password}}, PaddingScheme: padding}
 	if certPath != "" && keyPath != "" {
-		in.TLS = map[string]interface{}{"enabled": true, "certificate_path": certPath, "key_path": keyPath}
+		tls := map[string]interface{}{"enabled": true, "certificate_path": certPath, "key_path": keyPath}
+		if serverName != "" {
+			tls["server_name"] = serverName
+		}
+		in.TLS = tls
 	}
 	return in
 }

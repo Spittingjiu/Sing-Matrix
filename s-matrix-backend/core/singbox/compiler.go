@@ -125,7 +125,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewAnyTLSInbound(tagOf(node), port, str(node.Data, "password", "change-me"), cert, key, stringList(node.Data, "padding_scheme"))
+			in := NewAnyTLSInbound(tagOf(node), port, str(node.Data, "password", "change-me"), cert, key, stringList(node.Data, "padding_scheme"), str(node.Data, "server_name", str(node.Data, "sni", "")))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-vmess":

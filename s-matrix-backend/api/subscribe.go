@@ -98,6 +98,11 @@ func DiscoveryHandler(configPath string) gin.HandlerFunc {
 func BuildShareLinks(configPath, host string) ([]string, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
+		// A freshly installed panel has no compiled config yet; that is not an
+		// error condition for subscribe/discover callers, just zero nodes.
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
 		return nil, err
 	}
 	var cfg runtimeConfig
@@ -297,7 +302,22 @@ func buildAnyTLSLink(in map[string]interface{}, host string, port int, tag strin
 	password := firstUserValue(in, "password", "change-me")
 	q := url.Values{}
 	q.Set("insecure", "1")
+	if sni := inboundServerName(in); sni != "" {
+		q.Set("sni", sni)
+	}
 	return fmt.Sprintf("anytls://%s@%s:%d?%s#%s", url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag))
+}
+
+// inboundServerName extracts tls.server_name from a sing-box inbound map.
+func inboundServerName(in map[string]interface{}) string {
+	tlsMap, ok := in["tls"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if v, ok := tlsMap["server_name"].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func publicHost(c *gin.Context) string {
@@ -536,6 +556,9 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 		pwd := strMap(payload, "password", "change-me")
 		q := url.Values{}
 		q.Set("insecure", "1")
+		if sni := strMap(payload, "server_name", strMap(payload, "sni", "")); sni != "" {
+			q.Set("sni", sni)
+		}
 		return fmt.Sprintf("anytls://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
 
 	default:
