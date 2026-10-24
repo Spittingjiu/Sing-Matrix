@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"s-matrix/core/acme"
 	"s-matrix/models"
 )
 
@@ -198,13 +199,60 @@ func buildVLESSLink(in map[string]interface{}, host string, port int, tag, confi
 	return fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuid, host, port, q.Encode(), url.QueryEscape(tag))
 }
 
+// linkHost picks the address a client should dial. When the inbound carries a
+// publicly trusted certificate its server_name is the name that was verified to
+// point here, so a domain link is both correct and stable across IP changes.
+// Self-signed inbounds keep the caller-provided host.
+func linkHost(connectedHost, serverName, certPath string) string {
+	name := strings.TrimSpace(serverName)
+	if name == "" || net.ParseIP(name) != nil || certIsSelfSigned(certPath) {
+		return connectedHost
+	}
+	return name
+}
+
+// sniForLink picks the SNI to advertise in a share link. RFC 6066 forbids IP
+// literals in SNI, and echoing the connect address back as SNI is meaningless,
+// so links omit the parameter in both cases and clients fall back to the host.
+func sniForLink(candidate, connectHost string) string {
+	v := strings.TrimSpace(candidate)
+	if v == "" || net.ParseIP(v) != nil {
+		return ""
+	}
+	if strings.EqualFold(v, strings.TrimSpace(connectHost)) {
+		return ""
+	}
+	return v
+}
+
+// linkInsecure reports whether a client must skip certificate verification,
+// which is only true for self-signed certificates.
+func linkInsecure(certPath string) bool {
+	return certIsSelfSigned(certPath)
+}
+
 func buildHY2Link(in map[string]interface{}, host string, port int, tag string) string {
 	password := firstUserValue(in, "password", "change-me")
-	sni := strMap(in, "server_name", host)
+	certPath := ""
+	if tlsMap, ok := in["tls"].(map[string]interface{}); ok {
+		certPath = tlsCertPathFromContext(tlsMap)
+	}
+	host = linkHost(host, inboundServerName(in), certPath)
 	q := url.Values{}
-	q.Set("sni", sni)
-	q.Set("insecure", "1")
-	return fmt.Sprintf("hy2://%s@%s:%d?%s#%s", url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag))
+	if sni := sniForLink(inboundServerName(in), host); sni != "" {
+		q.Set("sni", sni)
+	}
+	if tlsMap, ok := in["tls"].(map[string]interface{}); ok && linkInsecure(tlsCertPathFromContext(tlsMap)) {
+		q.Set("insecure", "1")
+	}
+	if obfs := strMap(in, "obfs", ""); obfs != "" {
+		q.Set("obfs", obfs)
+	}
+	link := fmt.Sprintf("hysteria2://%s@%s:%d/", url.QueryEscape(password), host, port)
+	if enc := q.Encode(); enc != "" {
+		link += "?" + enc
+	}
+	return link + "#" + url.QueryEscape(tag)
 }
 
 func buildVMessLink(in map[string]interface{}, host string, port int, tag string) string {
@@ -300,14 +348,23 @@ func buildHysteriaLink(in map[string]interface{}, host string, port int, tag str
 
 func buildAnyTLSLink(in map[string]interface{}, host string, port int, tag string) string {
 	password := firstUserValue(in, "password", "change-me")
+	certPath := ""
+	if tlsMap, ok := in["tls"].(map[string]interface{}); ok {
+		certPath = tlsCertPathFromContext(tlsMap)
+	}
+	host = linkHost(host, inboundServerName(in), certPath)
 	q := url.Values{}
-	if tlsMap, ok := in["tls"].(map[string]interface{}); ok && certIsSelfSigned(tlsCertPathFromContext(tlsMap)) {
+	if linkInsecure(certPath) {
 		q.Set("insecure", "1")
 	}
-	if sni := inboundServerName(in); sni != "" {
+	if sni := sniForLink(inboundServerName(in), host); sni != "" {
 		q.Set("sni", sni)
 	}
-	return fmt.Sprintf("anytls://%s@%s:%d?%s#%s", url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag))
+	link := fmt.Sprintf("anytls://%s@%s:%d/", url.QueryEscape(password), host, port)
+	if enc := q.Encode(); enc != "" {
+		link += "?" + enc
+	}
+	return link + "#" + url.QueryEscape(tag)
 }
 
 // inboundServerName extracts tls.server_name from a sing-box inbound map.
@@ -323,17 +380,37 @@ func inboundServerName(in map[string]interface{}) string {
 }
 
 func publicHost(c *gin.Context) string {
-	if h := c.Query("host"); h != "" {
-		return h
+	host := strings.TrimSpace(c.Query("host"))
+	if host == "" {
+		host = c.Request.Host
+		if xfh := c.GetHeader("X-Forwarded-Host"); xfh != "" {
+			host = xfh
+		}
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
 	}
-	host := c.Request.Host
-	if xfh := c.GetHeader("X-Forwarded-Host"); xfh != "" {
-		host = xfh
-	}
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		return h
+	host = strings.Trim(host, "[]")
+	// A share link must never point at loopback or an internal address: that is
+	// what the panel sees when it is opened through a local tunnel or proxy, and
+	// such links are dead for anyone else.
+	if isUnroutableHost(host) {
+		if ip := acme.DetectPublicIP(); ip != "" {
+			return ip
+		}
 	}
 	return host
+}
+
+func isUnroutableHost(host string) bool {
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast()
 }
 
 func subscriptionURL(c *gin.Context) string {
@@ -466,13 +543,21 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 
 	case "hysteria2":
 		pwd := strMap(payload, "password", "change-me")
-		sni := strMap(payload, "server_name", host)
 		q := url.Values{}
-		q.Set("sni", sni)
-		if certIsSelfSigned(strMap(payload, "certificate_path", "")) {
+		if sni := sniForLink(strMap(payload, "server_name", strMap(payload, "sni", "")), host); sni != "" {
+			q.Set("sni", sni)
+		}
+		if linkInsecure(strMap(payload, "certificate_path", "")) {
 			q.Set("insecure", "1")
 		}
-		return fmt.Sprintf("hy2://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
+		if obfs := strMap(payload, "obfs", ""); obfs != "" {
+			q.Set("obfs", obfs)
+		}
+		link := fmt.Sprintf("hysteria2://%s@%s:%d/", url.QueryEscape(pwd), host, port)
+		if enc := q.Encode(); enc != "" {
+			link += "?" + enc
+		}
+		return link + "#" + url.QueryEscape(tag)
 
 	case "vmess":
 		uuid := strMap(payload, "uuid", "00000000-0000-0000-0000-000000000000")
@@ -562,13 +647,17 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 	case "anytls":
 		pwd := strMap(payload, "password", "change-me")
 		q := url.Values{}
-		if certIsSelfSigned(strMap(payload, "certificate_path", "")) {
+		if linkInsecure(strMap(payload, "certificate_path", "")) {
 			q.Set("insecure", "1")
 		}
-		if sni := strMap(payload, "server_name", strMap(payload, "sni", "")); sni != "" {
+		if sni := sniForLink(strMap(payload, "server_name", strMap(payload, "sni", "")), host); sni != "" {
 			q.Set("sni", sni)
 		}
-		return fmt.Sprintf("anytls://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
+		link := fmt.Sprintf("anytls://%s@%s:%d/", url.QueryEscape(pwd), host, port)
+		if enc := q.Encode(); enc != "" {
+			link += "?" + enc
+		}
+		return link + "#" + url.QueryEscape(tag)
 
 	default:
 		return fmt.Sprintf("ss://%s@%s:%d#%s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("aes-128-gcm:change-me@%s:%d", host, port))), host, port, url.QueryEscape(tag))

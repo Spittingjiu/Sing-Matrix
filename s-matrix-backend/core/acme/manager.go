@@ -35,14 +35,14 @@ type IssuedCert struct {
 
 // Status is what the UI shows about the local ACME setup.
 type Status struct {
-	ServerIP      string `json:"server_ip"`
-	Mode          string `json:"mode"`
-	Webroot       string `json:"webroot"`
-	Email         string `json:"email"`
-	CertDir       string `json:"cert_dir"`
-	Port80Free    bool   `json:"port80_free"`
-	AutoRedirect  bool   `json:"auto_redirect"`
-	HTTPSListen   string `json:"https_listen"`
+	ServerIP     string `json:"server_ip"`
+	Mode         string `json:"mode"`
+	Webroot      string `json:"webroot"`
+	Email        string `json:"email"`
+	CertDir      string `json:"cert_dir"`
+	Port80Free   bool   `json:"port80_free"`
+	AutoRedirect bool   `json:"auto_redirect"`
+	HTTPSListen  string `json:"https_listen"`
 }
 
 type acmeUser struct {
@@ -66,6 +66,10 @@ type Manager struct {
 	// HTTPSListen mirrors SMATRIX_HTTPS_ADDR so the UI can tell the user whether
 	// the panel itself can serve the new domain over HTTPS.
 	HTTPSListen string
+	// OnRenew runs after certificates were re-issued. The core only reads
+	// certificate files at startup, so without a restart a renewed certificate
+	// would never be served and nodes would fail once the old one expires.
+	OnRenew func()
 
 	mu      sync.Mutex
 	account *acmeUser
@@ -293,6 +297,9 @@ func (m *Manager) RenewAll(window time.Duration) []string {
 		}
 		log.Printf("[acme] renewed %s", domain)
 		renewed = append(renewed, domain)
+	}
+	if len(renewed) > 0 && m.OnRenew != nil {
+		m.OnRenew()
 	}
 	return renewed
 }

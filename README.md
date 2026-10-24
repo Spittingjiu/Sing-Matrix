@@ -146,6 +146,27 @@ SMATRIX_HTTP_ADDR=:80     # 应答 ACME 校验，其余 301 跳 HTTPS
 
 签发成功后前端会自动跳到 `https://域名`。
 
+### 参数与链接格式（已按官方规范核对）
+
+生成参数严格对照 sing-box 与协议官方文档，链接格式同样按 URI scheme 输出：
+
+| 项目 | 生成规则 |
+|---|---|
+| Hysteria2 服务端 | `users[].password`、`tls.{enabled,certificate_path,key_path,server_name}`、`masquerade` URL（HTTP3 伪装） |
+| AnyTLS 服务端 | `users[].{name,password}`、`tls`、`padding_scheme`（留空用官方默认填充方案） |
+| 链接 SNI | 只在有真实域名时输出 `sni`；**绝不用 IP 当 SNI**（RFC 6066 不允许），也不会把连接地址回填成 SNI |
+| `insecure` | 仅自签证书才带；Let's Encrypt 证书不带，客户端必须正常校验 |
+| 链接地址 | 有公信证书时用证书域名（`anytls://pwd@node.example.com:port/`），自签时用面板访问地址 |
+| 内网地址 | 链接里不会出现 `127.0.0.1`／私网地址，避免导出后别人根本连不上 |
+
+已验证的客户端 × 协议组合（真实拨号，非配置校对）：
+
+| 客户端 | Hysteria2 | AnyTLS（自签） | AnyTLS（LE 证书） |
+|---|---|---|---|
+| mihomo | ✅ | ✅ | ✅ |
+| sing-box | ✅ | — | — |
+| anytls-go 官方客户端 | — | ✅ | ✅ |
+
 ### 分享与订阅
 
 - 每个节点一键出分享链接 + 二维码（二维码本地渲染，不经过任何第三方服务）

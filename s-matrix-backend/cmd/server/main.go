@@ -59,6 +59,14 @@ func main() {
 	api.MigrateLegacyInbounds(db, certDir)
 
 	manager := singbox.NewSingboxManager(singboxBin, configPath, logPath)
+	// A renewed certificate only takes effect after the core re-reads its config.
+	certMgr.OnRenew = func() {
+		if err := manager.Restart(); err != nil {
+			log.Printf("[acme] certificate renewed but core restart failed: %v", err)
+		} else {
+			log.Printf("[acme] core restarted to serve renewed certificates")
+		}
+	}
 	if raw, err := os.ReadFile(configPath); err == nil {
 		// Self-heal: a config written by an older version may be rejected by the
 		// core (for example hysteria2 without TLS). Recompile it from the DB so

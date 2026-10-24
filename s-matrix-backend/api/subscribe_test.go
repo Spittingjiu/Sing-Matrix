@@ -16,7 +16,12 @@ func TestBuildShareLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(links) != 2 || !strings.HasPrefix(links[0], "vless://") || !strings.HasPrefix(links[1], "hy2://") {
+	if len(links) != 2 || !strings.HasPrefix(links[0], "vless://") || !strings.HasPrefix(links[1], "hysteria2://") {
 		t.Fatalf("bad links: %#v", links)
+	}
+	// The hysteria2 inbound has no TLS block at all, so the link must not invent
+	// an SNI from the connect address (RFC 6066 forbids IP literals in SNI).
+	if strings.Contains(links[1], "sni=") {
+		t.Fatalf("hy2 link must omit sni when the inbound has none: %s", links[1])
 	}
 }

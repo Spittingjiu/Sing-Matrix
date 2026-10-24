@@ -93,7 +93,7 @@ func NewRealityInbound(tag string, port int, uuid string, privateKey string, pub
 	return Inbound{
 		Type:       "vless",
 		Tag:        tag,
-		Listen:     "::",
+		Listen:     DefaultListen(),
 		ListenPort: port,
 		Users:      []User{{UUID: uuid, Flow: "xtls-rprx-vision"}},
 		TLS: map[string]interface{}{
@@ -119,7 +119,7 @@ func NewHysteria2Inbound(tag string, port int, password string, masquerade strin
 	in := Inbound{
 		Type:       "hysteria2",
 		Tag:        tag,
-		Listen:     "::",
+		Listen:     DefaultListen(),
 		ListenPort: port,
 		Users:      []User{{Password: password}},
 		Masquerade: masquerade,
@@ -138,7 +138,7 @@ func NewVMessInbound(tag string, port int, uuid string, network string, path str
 	in := Inbound{
 		Type:       "vmess",
 		Tag:        tag,
-		Listen:     "::",
+		Listen:     DefaultListen(),
 		ListenPort: port,
 		Users:      []User{{UUID: uuid}},
 	}
@@ -165,7 +165,7 @@ func NewTrojanInbound(tag string, port int, password string, serverName string) 
 	return Inbound{
 		Type:       "trojan",
 		Tag:        tag,
-		Listen:     "::",
+		Listen:     DefaultListen(),
 		ListenPort: port,
 		Users:      []User{{Password: password}},
 	}
@@ -176,7 +176,7 @@ func NewShadowsocksInbound(tag string, port int, method string, password string)
 	return Inbound{
 		Type:       "shadowsocks",
 		Tag:        tag,
-		Listen:     "::",
+		Listen:     DefaultListen(),
 		ListenPort: port,
 		Method:     method,
 		Password:   pwd,
@@ -211,7 +211,7 @@ func NewHysteriaInbound(tag string, port int, auth string, upMbps int, downMbps 
 	if downMbps <= 0 {
 		downMbps = 100
 	}
-	in := Inbound{Type: "hysteria", Tag: tag, Listen: "::", ListenPort: port, UpMbps: upMbps, DownMbps: downMbps, Users: []User{{Name: "default", AuthStr: auth}}}
+	in := Inbound{Type: "hysteria", Tag: tag, Listen: DefaultListen(), ListenPort: port, UpMbps: upMbps, DownMbps: downMbps, Users: []User{{Name: "default", AuthStr: auth}}}
 	if obfs != "" {
 		in.Obfs = obfs
 	}
@@ -225,7 +225,7 @@ func NewTUICInbound(tag string, port int, uuid string, password string, congesti
 	if congestion == "" {
 		congestion = "cubic"
 	}
-	in := Inbound{Type: "tuic", Tag: tag, Listen: "::", ListenPort: port, Users: []User{{Name: "default", UUID: uuid, Password: password}}, CongestionControl: congestion, AuthTimeout: "3s", Heartbeat: "10s"}
+	in := Inbound{Type: "tuic", Tag: tag, Listen: DefaultListen(), ListenPort: port, Users: []User{{Name: "default", UUID: uuid, Password: password}}, CongestionControl: congestion, AuthTimeout: "3s", Heartbeat: "10s"}
 	if certPath != "" && keyPath != "" {
 		in.TLS = map[string]interface{}{"enabled": true, "certificate_path": certPath, "key_path": keyPath}
 	}
@@ -236,7 +236,7 @@ func NewNaiveInbound(tag string, port int, username string, password string, net
 	if network == "" {
 		network = "tcp"
 	}
-	in := Inbound{Type: "naive", Tag: tag, Listen: "::", ListenPort: port, Network: network, Users: []User{{Username: username, Password: password}}}
+	in := Inbound{Type: "naive", Tag: tag, Listen: DefaultListen(), ListenPort: port, Network: network, Users: []User{{Username: username, Password: password}}}
 	if congestion != "" {
 		in.CongestionControl = congestion
 	}
@@ -250,11 +250,11 @@ func NewShadowTLSInbound(tag string, port int, password string, serverName strin
 	if serverName == "" {
 		serverName = "www.microsoft.com"
 	}
-	return Inbound{Type: "shadowtls", Tag: tag, Listen: "::", ListenPort: port, Version: 3, Users: []User{{Name: "default", Password: password}}, Handshake: map[string]interface{}{"server": serverName, "server_port": 443}, StrictMode: strict, WildcardSNI: wildcard}
+	return Inbound{Type: "shadowtls", Tag: tag, Listen: DefaultListen(), ListenPort: port, Version: 3, Users: []User{{Name: "default", Password: password}}, Handshake: map[string]interface{}{"server": serverName, "server_port": 443}, StrictMode: strict, WildcardSNI: wildcard}
 }
 
 func NewAnyTLSInbound(tag string, port int, password string, certPath string, keyPath string, padding []string, serverName string) Inbound {
-	in := Inbound{Type: "anytls", Tag: tag, Listen: "::", ListenPort: port, Users: []User{{Name: "default", Password: password}}, PaddingScheme: padding}
+	in := Inbound{Type: "anytls", Tag: tag, Listen: DefaultListen(), ListenPort: port, Users: []User{{Name: "default", Password: password}}, PaddingScheme: padding}
 	if certPath != "" && keyPath != "" {
 		tls := map[string]interface{}{"enabled": true, "certificate_path": certPath, "key_path": keyPath}
 		if serverName != "" {
@@ -282,7 +282,7 @@ func NewSocksInbound(tag string, port int) Inbound {
 	return Inbound{
 		Type:       "socks",
 		Tag:        tag,
-		Listen:     "::",
+		Listen:     DefaultListen(),
 		ListenPort: port,
 	}
 }
@@ -291,7 +291,7 @@ func NewHTTPInbound(tag string, port int) Inbound {
 	return Inbound{
 		Type:       "http",
 		Tag:        tag,
-		Listen:     "::",
+		Listen:     DefaultListen(),
 		ListenPort: port,
 	}
 }
