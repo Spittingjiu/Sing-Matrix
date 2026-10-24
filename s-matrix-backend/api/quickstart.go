@@ -135,16 +135,9 @@ func QuickAnyTLSHandler(dep quickDeps) gin.HandlerFunc {
 
 func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string, port int) {
 	_ = writeClientMeta(dep.ConfigPath, topo)
-	cfg, err := singbox.CompileAndWrite(topo, dep.ConfigPath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if err := dep.Manager.Restart(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "config": cfg})
-		return
-	}
-	// Persist to DB
+	// Persist first: the compiler must always run against the full desired
+	// state (every enabled inbound), otherwise creating a second node would
+	// silently drop the previous one from sing-box while leaving it in SQLite.
 	if dep.DB != nil {
 		for _, n := range topo.Nodes {
 			sbType := quickDBType(n.Kind)
@@ -153,7 +146,7 @@ func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string
 			}
 			pTag, _ := n.Data["tag"].(string)
 			payload := map[string]interface{}{}
-			for _, k := range []string{"private_key", "public_key", "short_id", "uuid", "password", "dest", "server_name", "certificate_path", "key_path", "masquerade", "padding_scheme"} {
+			for _, k := range []string{"private_key", "public_key", "short_id", "uuid", "password", "dest", "server_name", "sni", "certificate_path", "key_path", "masquerade", "padding_scheme"} {
 				if v, ok := n.Data[k]; ok {
 					payload[k] = v
 				}
@@ -168,9 +161,22 @@ func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string
 				Payload: string(payloadBytes),
 			})
 		}
+		if err := rebuildFromDB(dep.DB, dep.Manager, dep.ConfigPath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "写入成功但重建配置失败: " + err.Error()})
+			return
+		}
+	} else {
+		if _, err := singbox.CompileAndWrite(topo, dep.ConfigPath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if err := dep.Manager.Restart(); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	links, _ := BuildShareLinks(dep.ConfigPath, publicHost(c))
-	c.JSON(http.StatusOK, gin.H{"ok": true, "type": typ, "port": port, "nodes": topo.Nodes, "edges": topo.Edges, "links": links, "subscription": subscriptionURL(c), "running": dep.Manager.Status(), "config": cfg})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "type": typ, "port": port, "nodes": topo.Nodes, "edges": topo.Edges, "links": links, "subscription": subscriptionURL(c), "running": dep.Manager.Status()})
 }
 
 // quickDBType maps a topology node kind to the inbound type stored in SQLite.
