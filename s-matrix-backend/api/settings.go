@@ -5,12 +5,21 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
 
-var panelCredsFile = "/opt/sing-matrix/data/panel_creds.json"
+// panelCredsFile follows SMATRIX_DATA_DIR so an installation keeps its
+// credentials next to its own data instead of a hardcoded /opt path.
+var panelCredsFile = func() string {
+	if d := strings.TrimSpace(os.Getenv("SMATRIX_DATA_DIR")); d != "" {
+		return filepath.Join(d, "panel_creds.json")
+	}
+	return "/opt/sing-matrix/data/panel_creds.json"
+}()
 
 type panelCreds struct {
 	Username string `json:"username"`
