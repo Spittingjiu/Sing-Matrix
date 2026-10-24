@@ -301,7 +301,9 @@ func buildHysteriaLink(in map[string]interface{}, host string, port int, tag str
 func buildAnyTLSLink(in map[string]interface{}, host string, port int, tag string) string {
 	password := firstUserValue(in, "password", "change-me")
 	q := url.Values{}
-	q.Set("insecure", "1")
+	if tlsMap, ok := in["tls"].(map[string]interface{}); ok && certIsSelfSigned(tlsCertPathFromContext(tlsMap)) {
+		q.Set("insecure", "1")
+	}
 	if sni := inboundServerName(in); sni != "" {
 		q.Set("sni", sni)
 	}
@@ -467,7 +469,9 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 		sni := strMap(payload, "server_name", host)
 		q := url.Values{}
 		q.Set("sni", sni)
-		q.Set("insecure", "1")
+		if certIsSelfSigned(strMap(payload, "certificate_path", "")) {
+			q.Set("insecure", "1")
+		}
 		return fmt.Sprintf("hy2://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
 
 	case "vmess":
@@ -558,7 +562,9 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 	case "anytls":
 		pwd := strMap(payload, "password", "change-me")
 		q := url.Values{}
-		q.Set("insecure", "1")
+		if certIsSelfSigned(strMap(payload, "certificate_path", "")) {
+			q.Set("insecure", "1")
+		}
 		if sni := strMap(payload, "server_name", strMap(payload, "sni", "")); sni != "" {
 			q.Set("sni", sni)
 		}

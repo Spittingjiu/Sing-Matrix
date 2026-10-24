@@ -11,6 +11,7 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/mem"
 	"gorm.io/gorm"
+	"s-matrix/core/acme"
 	"s-matrix/core/singbox"
 	"s-matrix/models"
 )
@@ -21,6 +22,8 @@ type RouterDeps struct {
 	LogPath    string
 	DB         *gorm.DB
 	CertDir    string
+	DataDir    string
+	ACME       *acme.Manager
 }
 
 func NewRouter(deps ...RouterDeps) *gin.Engine {
@@ -49,6 +52,12 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	secured.POST("/certs/selfsigned", SelfSignedCertHandler(dep.CertDir))
 	secured.POST("/panel/connect-sub", ConnectSubHandler())
 	secured.GET("/panel/token", PanelTokenHandler())
+	acmeDeps := ACMEDeps{Manager: dep.ACME, DataDir: dep.DataDir}
+	secured.GET("/domain/zones", ACMEZonesHandler(acmeDeps))
+	secured.POST("/domain/token", ACMETokenHandler(acmeDeps))
+	secured.POST("/domain/issue", ACMECertHandler(acmeDeps))
+	secured.GET("/domain/certs", ACMECertListHandler(acmeDeps))
+	secured.POST("/quick/anytls-domain", QuickAnyTLSDomainHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB, CertDir: dep.CertDir, DataDir: dep.DataDir, ACME: dep.ACME}))
 	if dep.DB != nil {
 		secured.GET("/inbounds", ListInboundsHandler(dep.DB))
 		secured.POST("/inbounds/:id/toggle", ToggleInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))

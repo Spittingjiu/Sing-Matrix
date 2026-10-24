@@ -6,13 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"s-matrix/core/acme"
 	"s-matrix/core/singbox"
 	"s-matrix/models"
 )
@@ -22,6 +25,8 @@ type quickDeps struct {
 	ConfigPath string
 	DB         *gorm.DB
 	CertDir    string
+	DataDir    string
+	ACME       *acme.Manager
 }
 
 func QuickRealityHandler(dep quickDeps) gin.HandlerFunc {
@@ -133,7 +138,7 @@ func QuickAnyTLSHandler(dep quickDeps) gin.HandlerFunc {
 	}
 }
 
-func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string, port int) {
+func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string, port int, extra ...gin.H) {
 	_ = writeClientMeta(dep.ConfigPath, topo)
 	// Persist first: the compiler must always run against the full desired
 	// state (every enabled inbound), otherwise creating a second node would
@@ -176,7 +181,13 @@ func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string
 		}
 	}
 	links, _ := BuildShareLinks(dep.ConfigPath, publicHost(c))
-	c.JSON(http.StatusOK, gin.H{"ok": true, "type": typ, "port": port, "nodes": topo.Nodes, "edges": topo.Edges, "links": links, "subscription": subscriptionURL(c), "running": dep.Manager.Status()})
+	out := gin.H{"ok": true, "type": typ, "port": port, "nodes": topo.Nodes, "edges": topo.Edges, "links": links, "subscription": subscriptionURL(c), "running": dep.Manager.Status()}
+	for _, e := range extra {
+		for k, v := range e {
+			out[k] = v
+		}
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // quickDBType maps a topology node kind to the inbound type stored in SQLite.
@@ -277,4 +288,96 @@ func randomHex(bytes int) string {
 func randomUUIDLike() string {
 	h := randomHex(16)
 	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
+}
+
+// QuickAnyTLSDomainHandler is the "one-click domain" flow: point a real domain
+// at this host, issue a Let's Encrypt certificate over DNS-01, then create the
+// AnyTLS inbound with that certificate. The resulting link carries no
+// insecure flag, so clients verify TLS properly.
+func QuickAnyTLSDomainHandler(dep quickDeps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Domain    string `json:"domain"`
+			Subdomain string `json:"subdomain"`
+			Zone      string `json:"zone"`
+			IP        string `json:"ip"`
+			Remark    string `json:"remark"`
+			Port      int    `json:"port"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "bad json"})
+			return
+		}
+		if dep.ACME == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "ACME 未初始化"})
+			return
+		}
+		domain := strings.ToLower(strings.TrimSpace(req.Domain))
+		if domain == "" {
+			sub := strings.ToLower(strings.TrimSpace(req.Subdomain))
+			zone := strings.ToLower(strings.TrimSpace(req.Zone))
+			if sub != "" && zone != "" {
+				domain = sub + "." + zone
+			}
+		}
+		if domain == "" || !strings.Contains(domain, ".") {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "请填写域名（或子域名 + 后缀）"})
+			return
+		}
+
+		ip := strings.TrimSpace(req.IP)
+		if ip == "" {
+			ip = acme.DetectPublicIP()
+		}
+		if ip == "" {
+			ip = req.IP
+		}
+		dnsChanged := false
+		if ip != "" {
+			rec, changed, err := acme.NewDNS(cfToken(dep.DataDir)).EnsureARecord(domain, ip)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "DNS 记录写入失败: " + err.Error()})
+				return
+			}
+			dnsChanged = changed || rec.ID == ""
+		}
+
+		cert, err := dep.ACME.Obtain(domain)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "证书申请失败: " + err.Error(), "dns_updated": dnsChanged, "ip": ip})
+			return
+		}
+
+		port := singbox.PickAvailablePort(req.Port, map[int]bool{})
+		if port == 0 {
+			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "no available port"})
+			return
+		}
+		remark := strings.TrimSpace(req.Remark)
+		if remark == "" {
+			remark = domain
+		}
+		topo := singleInboundTopology("anytls-domain", "inbound-anytls", port, remark, map[string]interface{}{
+			"tag":              remark,
+			"port":             port,
+			"password":         randomPassword(24),
+			"server_name":      domain,
+			"sni":              domain,
+			"certificate_path": cert.CertPath,
+			"key_path":         cert.KeyPath,
+			"acme":             true,
+		})
+		password, _ := topo.Nodes[0].Data["password"].(string)
+		own := fmt.Sprintf("anytls://%s@%s:%d?sni=%s#%s",
+			url.QueryEscape(password), publicHost(c), port, url.QueryEscape(domain), url.QueryEscape(remark))
+		respondQuick(c, dep, topo, "anytls", port, gin.H{
+			"domain":       domain,
+			"ip":           ip,
+			"dns_updated":  dnsChanged,
+			"cert_path":    cert.CertPath,
+			"cert_expires": cert.NotAfter.Format(time.RFC3339),
+			"acme":         true,
+			"link":         own,
+		})
+	}
 }

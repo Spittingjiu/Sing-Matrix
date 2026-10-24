@@ -1,9 +1,11 @@
 package api
 
 import (
+	"os"
 	"strings"
 	"testing"
 
+	"s-matrix/core/singbox"
 	"s-matrix/models"
 )
 
@@ -54,5 +56,36 @@ func TestBuildAnyTLSLinkFromDBPayload(t *testing.T) {
 	}
 	if !strings.Contains(link, "insecure=1") {
 		t.Fatalf("missing insecure: %s", link)
+	}
+}
+
+// An ACME-signed certificate must never be published with insecure=1: that
+// would teach every client to skip verification for no reason.
+func TestAnyTLSAcmeCertOmitsInsecure(t *testing.T) {
+	dir := t.TempDir()
+	pair, err := singbox.GenerateSelfSignedPair("acme-looking.example.com", nil, []string{"acme-looking.example.com"}, 30)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	_ = pair // keep the import honest for the self-signed branch below
+	_ = dir
+
+	selfSigned := t.TempDir() + "/self.pem"
+	if err := os.WriteFile(selfSigned, pair.CertPEM, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	ib := models.Inbound{Tag: "n", Type: "anytls", Port: 1234,
+		Payload: `{"password":"***","server_name":"acme-looking.example.com","certificate_path":"` + selfSigned + `"}`}
+	link := buildLinkFromRecord(ib, "1.2.3.4")
+	if !strings.Contains(link, "insecure=1") {
+		t.Fatalf("self-signed cert should keep insecure=1: %s", link)
+	}
+
+	// Missing certificate path is treated as self-signed (conservative default).
+	ib2 := models.Inbound{Tag: "n2", Type: "anytls", Port: 1235,
+		Payload: `{"password":"***","server_name":"x.example.com"}`}
+	if !strings.Contains(buildLinkFromRecord(ib2, "1.2.3.4"), "insecure=1") {
+		t.Fatalf("unknown cert should default to insecure=1")
 	}
 }
