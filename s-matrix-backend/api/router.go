@@ -47,6 +47,8 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	secured.POST("/quick/anytls", QuickAnyTLSHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB, CertDir: dep.CertDir}))
 	secured.GET("/certs", ListCertsHandler(dep.CertDir))
 	secured.POST("/certs/selfsigned", SelfSignedCertHandler(dep.CertDir))
+	secured.POST("/panel/connect-sub", ConnectSubHandler())
+	secured.GET("/panel/token", PanelTokenHandler())
 	if dep.DB != nil {
 		secured.GET("/inbounds", ListInboundsHandler(dep.DB))
 		secured.POST("/inbounds/:id/toggle", ToggleInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))

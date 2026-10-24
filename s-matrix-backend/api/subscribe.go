@@ -341,9 +341,12 @@ func subscriptionURL(c *gin.Context) string {
 func forwardedScheme(c *gin.Context) string {
 	scheme := c.GetHeader("X-Forwarded-Proto")
 	if scheme == "" {
-		scheme = "http"
+		if c.Request.TLS != nil {
+			return "https"
+		}
+		return "http"
 	}
-	return scheme
+	return strings.TrimSpace(strings.Split(scheme, ",")[0])
 }
 
 func firstStringValue(m map[string]interface{}, key, fallback string) string {
