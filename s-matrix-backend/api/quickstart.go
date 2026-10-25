@@ -31,13 +31,30 @@ type quickDeps struct {
 	PanelAddr  string
 }
 
+// defaultRealityDest must be a site that speaks TLS 1.3 + HTTP/2 from this host.
+// www.microsoft.com is fronted by an edge that makes REALITY fail the handshake
+// (clients see EOF), so it must not be the default.
+const defaultRealityDest = "www.cloudflare.com"
+
 func QuickRealityHandler(dep quickDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
 			Remark string `json:"remark"`
+			Dest   string `json:"dest"`
+			SNI    string `json:"sni"`
 		}
 		_ = c.ShouldBindJSON(&req)
 		remark := strings.TrimSpace(req.Remark)
+		dest := strings.TrimSpace(req.Dest)
+		if dest == "" {
+			dest = strings.TrimSpace(req.SNI)
+		}
+		if dest == "" {
+			// www.microsoft.com is served by an edge that fails REALITY
+			// handshake validation here (clients get EOF). Cloudflare's own
+			// site is TLS 1.3 + H2 clean and is the safest default.
+			dest = defaultRealityDest
+		}
 
 		keys := generateRealityMaterial("/usr/local/bin/sing-box")
 		port := singbox.PickAvailablePort(0, map[int]bool{})
@@ -52,8 +69,8 @@ func QuickRealityHandler(dep quickDeps) gin.HandlerFunc {
 			"tag":         remark,
 			"port":        port,
 			"uuid":        randomUUIDLike(),
-			"dest":        "www.microsoft.com",
-			"server_name": "www.microsoft.com",
+			"dest":        dest,
+			"server_name": dest,
 			"short_id":    keys["short_id"],
 			"private_key": keys["private_key"],
 			"public_key":  keys["public_key"],
@@ -245,7 +262,18 @@ func singleInboundTopology(id, kind string, port int, remark string, data map[st
 }
 
 func writeClientMeta(configPath string, topo singbox.UIData) error {
+	// Merge with whatever is already on disk: this file is the only place the
+	// public half of a REALITY key is kept, so overwriting it would silently
+	// degrade every previously created node's share link to pbk=.
 	meta := map[string]map[string]string{}
+	if data, err := os.ReadFile(configPath + ".client.json"); err == nil {
+		var root struct {
+			Inbounds map[string]map[string]string `json:"inbounds"`
+		}
+		if err := json.Unmarshal(data, &root); err == nil && root.Inbounds != nil {
+			meta = root.Inbounds
+		}
+	}
 	for _, n := range topo.Nodes {
 		tag := ""
 		if n.Data != nil {
@@ -256,11 +284,21 @@ func writeClientMeta(configPath string, topo singbox.UIData) error {
 		if tag == "" {
 			tag = n.ID
 		}
-		entry := map[string]string{}
+		entry := meta[tag]
+		if entry == nil {
+			entry = map[string]string{}
+		}
 		for _, k := range []string{"public_key", "short_id"} {
 			if n.Data != nil {
 				if v, ok := n.Data[k].(string); ok && v != "" {
 					entry[k] = v
+				}
+			}
+		}
+		if entry["public_key"] == "" {
+			if pk, ok := n.Data["private_key"].(string); ok && pk != "" {
+				if derived := singbox.DeriveRealityPublicKey(pk); derived != "" {
+					entry["public_key"] = derived
 				}
 			}
 		}
@@ -279,7 +317,17 @@ func writeClientMeta(configPath string, topo singbox.UIData) error {
 }
 
 func generateRealityMaterial(bin string) map[string]string {
-	result := map[string]string{"short_id": randomHex(8), "private_key": randomHex(43), "public_key": ""}
+	result := map[string]string{"short_id": randomHex(8), "private_key": "", "public_key": ""}
+	// Prefer computing the keypair in-process: a missing sing-box binary must
+	// not degrade into an invalid hex "key" that no client can use.
+	if priv, pub, err := singbox.GenerateRealityKeypair(); err == nil {
+		result["private_key"] = priv
+		result["public_key"] = pub
+		return result
+	}
+	if bin == "" {
+		return result
+	}
 	if out, err := exec.Command(bin, "generate", "reality-keypair").CombinedOutput(); err == nil {
 		text := string(out)
 		rePriv := regexp.MustCompile(`(?m)^PrivateKey:\s*(\S+)`)
@@ -290,6 +338,9 @@ func generateRealityMaterial(bin string) map[string]string {
 		if m := rePub.FindStringSubmatch(text); len(m) == 2 {
 			result["public_key"] = m[1]
 		}
+	}
+	if result["public_key"] == "" && result["private_key"] != "" {
+		result["public_key"] = singbox.DeriveRealityPublicKey(result["private_key"])
 	}
 	return result
 }

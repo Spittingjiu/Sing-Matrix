@@ -117,6 +117,11 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 					if r, ok := ib.TLS["reality"].(map[string]interface{}); ok {
 						if pk, ok := r["private_key"].(string); ok {
 							payload["private_key"] = pk
+							// Persist the public half too; a server config never carries
+							// it, and links built from the record need it.
+							if pub := singbox.DeriveRealityPublicKey(pk); pub != "" {
+								payload["public_key"] = pub
+							}
 						}
 						if sids, ok := r["short_id"].([]string); ok && len(sids) > 0 {
 							payload["short_id"] = sids[0]

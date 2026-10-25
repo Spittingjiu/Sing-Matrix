@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"s-matrix/core/acme"
+	"s-matrix/core/singbox"
 	"s-matrix/models"
 )
 
@@ -178,6 +179,11 @@ func buildVLESSLink(in map[string]interface{}, host string, port int, tag, confi
 	pbk := meta["public_key"]
 	if pbk == "" {
 		pbk = strMap(reality, "public_key", "")
+	}
+	if pbk == "" {
+		// Server config only holds the private key; without the derived public
+		// half the link is unusable in every client.
+		pbk = singbox.DeriveRealityPublicKey(strMap(reality, "private_key", ""))
 	}
 	sid := meta["short_id"]
 	if sid == "" {
@@ -522,6 +528,9 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 	case "vless":
 		uuid := strMap(payload, "uuid", "00000000-0000-0000-0000-000000000000")
 		pubKey := strMap(payload, "public_key", "")
+		if pubKey == "" {
+			pubKey = singbox.DeriveRealityPublicKey(strMap(payload, "private_key", ""))
+		}
 		shortID := strMap(payload, "short_id", "")
 		sni := strMap(payload, "server_name", "www.cloudflare.com")
 		if sni == "" {
