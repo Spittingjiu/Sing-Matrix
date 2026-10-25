@@ -20,7 +20,12 @@ func panelPublicURL(c *gin.Context) string {
 	if xfh := c.GetHeader("X-Forwarded-Host"); xfh != "" {
 		host = xfh
 	}
-	return fmt.Sprintf("%s://%s", forwardedScheme(c), host)
+	scheme := forwardedScheme(c)
+	// If accessed without X-Forwarded-Proto but behind standard reverse proxy
+	if scheme == "http" && strings.Contains(host, "2000319.xyz") {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s", scheme, host)
 }
 
 // ConnectSubHandler pushes this panel into subgo as an SBUI source, so the
