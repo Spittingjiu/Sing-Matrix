@@ -38,6 +38,7 @@ func MountStatic(r *gin.Engine) {
 func serveApp(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.Status(http.StatusOK)
 	if err := appTemplate.Execute(c.Writer, pageData{Title: "S-Matrix"}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}
