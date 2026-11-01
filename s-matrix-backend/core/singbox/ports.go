@@ -4,16 +4,24 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"sync"
 )
 
-// Reserved system and service ports to avoid during node generation
+var portMutex sync.Mutex
+
+// Reserved system, sing-box default and accelerator ports to avoid collision
 var ReservedPorts = map[int]bool{
 	22:    true, // SSH
 	53:    true, // DNS
 	80:    true, // HTTP / ACME HTTP-01
 	443:   true, // HTTPS / Web
+	1053:  true, // Local DNS Inbound
+	10808: true, // SOCKS5 Inbound
+	10809: true, // HTTP Inbound
+	10810: true, // TProxy Inbound
 	19088: true, // Sing-Matrix Panel Web UI
-	39999: true, // Sing-Matrix Accelerator Keep-Alive UDP
+	39998: true, // Sing-Matrix Accelerator SOCKS5 Forwarder (127.0.0.1)
+	39999: true, // Sing-Matrix Accelerator Control UDP
 }
 
 func IsPortAvailable(port int) bool {
@@ -34,12 +42,16 @@ func IsPortAvailable(port int) bool {
 }
 
 func PickAvailablePort(preferred int, used map[int]bool) int {
-	// Trust the preferred port only if not reserved and not used
+	portMutex.Lock()
+	defer portMutex.Unlock()
+
+	// Trust preferred port only if strictly valid and unreserved
 	if preferred > 0 && !ReservedPorts[preferred] && !used[preferred] && IsPortAvailable(preferred) {
 		used[preferred] = true
 		return preferred
 	}
-	// Random scan in range 10000-60000, skip occupied and reserved ports
+
+	// Random scan in unprivileged range 10000-60000
 	start := 10000 + rand.Intn(50001)
 	for offset := 0; offset <= 50000; offset++ {
 		port := 10000 + (start-10000+offset)%50001
