@@ -4,10 +4,13 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,18 +20,119 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var jwtSecret = func() []byte {
-	if v := strings.TrimSpace(os.Getenv("SMATRIX_JWT_SECRET")); v != "" {
-		return []byte(v)
+var (
+	cachedJWTSecret []byte
+	jwtSecretMu     sync.RWMutex
+)
+
+func jwtSecretFilePath() string {
+	if d := strings.TrimSpace(os.Getenv("SMATRIX_DATA_DIR")); d != "" {
+		return filepath.Join(d, "jwt.secret")
 	}
-	return []byte("s-matrix-change-me-development-secret")
-}()
+	dir := filepath.Dir(panelCredsFile)
+	return filepath.Join(dir, "jwt.secret")
+}
+
+func getJWTSecret() []byte {
+	jwtSecretMu.RLock()
+	if len(cachedJWTSecret) > 0 {
+		defer jwtSecretMu.RUnlock()
+		return cachedJWTSecret
+	}
+	jwtSecretMu.RUnlock()
+
+	jwtSecretMu.Lock()
+	defer jwtSecretMu.Unlock()
+	if len(cachedJWTSecret) > 0 {
+		return cachedJWTSecret
+	}
+
+	if v := strings.TrimSpace(os.Getenv("SMATRIX_JWT_SECRET")); v != "" {
+		cachedJWTSecret = []byte(v)
+		return cachedJWTSecret
+	}
+
+	secretPath := jwtSecretFilePath()
+	if data, err := os.ReadFile(secretPath); err == nil && len(strings.TrimSpace(string(data))) >= 16 {
+		cachedJWTSecret = []byte(strings.TrimSpace(string(data)))
+		return cachedJWTSecret
+	}
+
+	// Persist a unique 32-byte (64 hex char) random secret if unconfigured
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	sec := hex.EncodeToString(b)
+	_ = os.MkdirAll(filepath.Dir(secretPath), 0755)
+	_ = os.WriteFile(secretPath, []byte(sec), 0600)
+	cachedJWTSecret = []byte(sec)
+	return cachedJWTSecret
+}
+
 var handshakeMu sync.Mutex
 var handshakeNonces = map[string]int64{}
 
 type loginRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
+}
+
+type loginAttempt struct {
+	failures  int
+	lockUntil time.Time
+}
+
+var (
+	loginLimiterMu sync.Mutex
+	loginAttempts  = map[string]*loginAttempt{}
+)
+
+func checkLoginRateLimit(ip string) (bool, int) {
+	loginLimiterMu.Lock()
+	defer loginLimiterMu.Unlock()
+
+	now := time.Now()
+	// Clean expired entries
+	for k, v := range loginAttempts {
+		if now.Sub(v.lockUntil) > 30*time.Minute && v.failures == 0 {
+			delete(loginAttempts, k)
+		}
+	}
+
+	att, ok := loginAttempts[ip]
+	if !ok {
+		return true, 0
+	}
+	if now.Before(att.lockUntil) {
+		remaining := int(att.lockUntil.Sub(now).Seconds())
+		if remaining < 1 {
+			remaining = 1
+		}
+		return false, remaining
+	}
+	return true, 0
+}
+
+func recordLoginResult(ip string, success bool) {
+	loginLimiterMu.Lock()
+	defer loginLimiterMu.Unlock()
+
+	now := time.Now()
+	att, ok := loginAttempts[ip]
+	if !ok {
+		att = &loginAttempt{}
+		loginAttempts[ip] = att
+	}
+
+	if success {
+		delete(loginAttempts, ip)
+		return
+	}
+
+	att.failures++
+	if att.failures >= 5 {
+		att.lockUntil = now.Add(15 * time.Minute)
+		log.Printf("[SECURITY] IP %s locked out for 15 minutes after %d failed login attempts", ip, att.failures)
+	}
 }
 
 func randomNonce(n int) string {
@@ -108,16 +212,27 @@ func verifyHandshake(c *gin.Context, token string) bool {
 }
 
 func LoginHandler(c *gin.Context) {
+	ip := c.ClientIP()
+	allowed, remaining := checkLoginRateLimit(ip)
+	if !allowed {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": fmt.Sprintf("Too many failed login attempts. Locked for %d more seconds.", remaining),
+		})
+		return
+	}
+
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	creds := loadCreds()
-	if req.Username != creds.Username || req.Password != creds.Password {
+	if req.Username != creds.Username || !verifyPassword(creds, req.Password) {
+		recordLoginResult(ip, false)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
 		return
 	}
+	recordLoginResult(ip, true)
 	signed, err := buildLoginToken(req.Username)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -127,11 +242,14 @@ func LoginHandler(c *gin.Context) {
 }
 
 func buildLoginToken(username string) (string, error) {
+	now := time.Now()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":  username,
 		"role": "admin",
+		"iat":  now.Unix(),
+		"exp":  now.Add(7 * 24 * time.Hour).Unix(),
 	})
-	return token.SignedString(jwtSecret)
+	return token.SignedString(getJWTSecret())
 }
 
 func JWTMiddleware() gin.HandlerFunc {
@@ -144,21 +262,31 @@ func JWTMiddleware() gin.HandlerFunc {
 			raw = q
 		}
 		if raw == "" {
-			// Handshake mode: derive stable token from current credentials and verify HMAC without exposing token.
+			// Handshake mode
 			creds := loadCreds()
-			stable, _ := buildLoginToken(creds.Username)
-			if stable != "" && verifyHandshake(c, stable) {
+			if creds.ApiToken != "" && verifyHandshake(c, creds.ApiToken) {
 				c.Next()
 				return
 			}
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
 			return
 		}
-		token, err := jwt.Parse(raw, func(token *jwt.Token) (interface{}, error) { return jwtSecret, nil })
-		if err != nil || !token.Valid {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		token, err := jwt.Parse(raw, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return getJWTSecret(), nil
+		})
+		if err == nil && token.Valid {
+			c.Next()
 			return
 		}
-		c.Next()
+		// Also accept static ApiToken if matched
+		creds := loadCreds()
+		if creds.ApiToken != "" && subtle.ConstantTimeCompare([]byte(raw), []byte(creds.ApiToken)) == 1 {
+			c.Next()
+			return
+		}
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 	}
 }

@@ -39,3 +39,37 @@ func TestCompileToSingbox(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCompilerReplacesWeakDefaults(t *testing.T) {
+	dir := t.TempDir()
+	certPath, keyPath, _, err := EnsureSelfSignedPair(dir, "unit", "www.bing.com", nil, []string{"www.bing.com"})
+	if err != nil {
+		t.Fatalf("cert: %v", err)
+	}
+
+	ui := UIData{
+		Nodes: []UINode{
+			{ID: "r1", Kind: "inbound-reality", Data: map[string]interface{}{"tag": "r1", "port": 44301, "uuid": "00000000-0000-0000-0000-000000000000"}},
+			{ID: "h1", Kind: "inbound-hy2", Data: map[string]interface{}{"tag": "h1", "port": 44302, "password": "change-me", "certificate_path": certPath, "key_path": keyPath}},
+		},
+		Edges: []UIEdge{},
+	}
+
+	cfg, err := CompileToSingbox(ui)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, in := range cfg.Inbounds {
+		if in.Tag == "r1" {
+			if len(in.Users) == 0 || in.Users[0].UUID == "00000000-0000-0000-0000-000000000000" || len(in.Users[0].UUID) < 32 {
+				t.Fatalf("reality inbound still has weak/zero UUID: %+v", in.Users)
+			}
+		}
+		if in.Tag == "h1" {
+			if len(in.Users) == 0 || in.Users[0].Password == "change-me" || len(in.Users[0].Password) < 16 {
+				t.Fatalf("hy2 inbound still has weak 'change-me' password: %+v", in.Users)
+			}
+		}
+	}
+}

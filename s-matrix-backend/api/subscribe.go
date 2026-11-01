@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"s-matrix/core/acme"
 	"s-matrix/core/singbox"
 	"s-matrix/models"
@@ -20,8 +22,43 @@ type runtimeConfig struct {
 	Inbounds []map[string]interface{} `json:"inbounds"`
 }
 
+func isAuthorizedSubscription(c *gin.Context, validToken string) bool {
+	tok := strings.TrimSpace(c.Param("token"))
+	if tok != "" && validToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(validToken)) == 1 {
+		return true
+	}
+	q := strings.TrimSpace(c.Query("token"))
+	if q != "" && validToken != "" && subtle.ConstantTimeCompare([]byte(q), []byte(validToken)) == 1 {
+		return true
+	}
+	auth := c.GetHeader("Authorization")
+	raw := ""
+	if strings.HasPrefix(auth, "Bearer ") {
+		raw = strings.TrimPrefix(auth, "Bearer ")
+	} else if q != "" {
+		raw = q
+	}
+	if raw != "" {
+		token, err := jwt.Parse(raw, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return getJWTSecret(), nil
+		})
+		if err == nil && token.Valid {
+			return true
+		}
+	}
+	return false
+}
+
 func SubscriptionHandler(configPath string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		creds := loadCreds()
+		if !isAuthorizedSubscription(c, creds.SubscriptionToken) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "invalid subscription token"})
+			return
+		}
 		links, err := BuildShareLinks(configPath, publicHost(c))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -45,6 +82,11 @@ func ShareLinksHandler(configPath string) gin.HandlerFunc {
 
 func DiscoveryHandler(configPath string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		creds := loadCreds()
+		if !isAuthorizedSubscription(c, creds.SubscriptionToken) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
 		links, err := BuildShareLinks(configPath, publicHost(c))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -420,7 +462,12 @@ func isUnroutableHost(host string) bool {
 }
 
 func subscriptionURL(c *gin.Context) string {
-	return fmt.Sprintf("%s://%s/api/v1/sub/default", forwardedScheme(c), c.Request.Host)
+	creds := loadCreds()
+	token := creds.SubscriptionToken
+	if token == "" {
+		token = "default"
+	}
+	return fmt.Sprintf("%s://%s/api/v1/sub/%s", forwardedScheme(c), c.Request.Host, token)
 }
 
 func forwardedScheme(c *gin.Context) string {

@@ -1,7 +1,10 @@
 package api
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -10,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // panelCredsFile follows SMATRIX_DATA_DIR so an installation keeps its
@@ -22,20 +26,76 @@ var panelCredsFile = func() string {
 }()
 
 type panelCreds struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username          string `json:"username"`
+	PasswordHash      string `json:"password_hash,omitempty"`
+	Password          string `json:"password,omitempty"` // legacy plaintext for auto-migration
+	SubscriptionToken string `json:"subscription_token"`
+	ApiToken          string `json:"api_token,omitempty"`
+}
+
+func randomAlphanumeric(n int) string {
+	const charset = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	for i := range b {
+		b[i] = charset[int(b[i])%len(charset)]
+	}
+	return string(b)
 }
 
 func loadCreds() panelCreds {
 	data, err := os.ReadFile(panelCredsFile)
 	if err != nil {
-		return panelCreds{Username: "admin", Password: "admin"}
+		// Generate random strong credentials on first run instead of defaulting to admin/admin.
+		pwd := randomAlphanumeric(20)
+		hash, _ := bcrypt.GenerateFromPassword([]byte(pwd), bcrypt.DefaultCost)
+		c := panelCreds{
+			Username:          "admin",
+			PasswordHash:      string(hash),
+			SubscriptionToken: randomHex(16),
+			ApiToken:          randomHex(24),
+		}
+		_ = os.MkdirAll(filepath.Dir(panelCredsFile), 0755)
+		_ = saveCreds(c)
+		log.Printf("[SECURITY] Generated initial panel credentials saved to %s (username: admin, password: %s)", panelCredsFile, pwd)
+		return c
 	}
 	var c panelCreds
 	if err := json.Unmarshal(data, &c); err != nil {
-		return panelCreds{Username: "admin", Password: "admin"}
+		log.Printf("[ERROR] failed to parse %s: %v", panelCredsFile, err)
+		return c
+	}
+	needSave := false
+	if c.SubscriptionToken == "" {
+		c.SubscriptionToken = randomHex(16)
+		needSave = true
+	}
+	if c.ApiToken == "" {
+		c.ApiToken = randomHex(24)
+		needSave = true
+	}
+	// Seamless auto-migration: if legacy plaintext password exists, hash with bcrypt and clear plaintext.
+	if c.PasswordHash == "" && c.Password != "" {
+		if hash, err := bcrypt.GenerateFromPassword([]byte(c.Password), bcrypt.DefaultCost); err == nil {
+			c.PasswordHash = string(hash)
+			c.Password = ""
+			needSave = true
+		}
+	}
+	if needSave {
+		_ = saveCreds(c)
 	}
 	return c
+}
+
+func verifyPassword(c panelCreds, input string) bool {
+	if c.PasswordHash != "" {
+		return bcrypt.CompareHashAndPassword([]byte(c.PasswordHash), []byte(input)) == nil
+	}
+	if c.Password != "" {
+		return subtle.ConstantTimeCompare([]byte(c.Password), []byte(input)) == 1
+	}
+	return false
 }
 
 func saveCreds(c panelCreds) error {
@@ -56,18 +116,29 @@ func ChangePasswordHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
-	if len(req.NewPassword) < 6 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "新密码至少6位"})
+	if req.OldPassword == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "旧密码不能为空"})
+		return
+	}
+	if len(req.NewPassword) < 8 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "新密码长度不能少于8位"})
 		return
 	}
 	creds := loadCreds()
-	// If old password is empty, it's first-time setup or admin/admin
-	if req.OldPassword != "" && creds.Password != "admin" && req.OldPassword != creds.Password {
+	if !verifyPassword(creds, req.OldPassword) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "旧密码不正确"})
 		return
 	}
-	creds.Username = req.Username
-	creds.Password = req.NewPassword
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "密码加密失败"})
+		return
+	}
+	if req.Username != "" {
+		creds.Username = req.Username
+	}
+	creds.PasswordHash = string(hash)
+	creds.Password = ""
 	if err := saveCreds(creds); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "保存失败"})
 		return

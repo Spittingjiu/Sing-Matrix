@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -42,6 +43,32 @@ func finalMaskOf(data map[string]interface{}) string {
 	return str(data, "finalmask", str(data, "final_mask", str(data, "mask", "")))
 }
 
+func safeUUID(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || v == "00000000-0000-0000-0000-000000000000" {
+		var b [16]byte
+		_, _ = rand.Read(b[:])
+		b[6] = (b[6] & 0x0f) | 0x40
+		b[8] = (b[8] & 0x3f) | 0x80
+		return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	}
+	return v
+}
+
+func safePassword(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || v == "change-me" {
+		const charset = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+		b := make([]byte, 24)
+		_, _ = rand.Read(b)
+		for i := range b {
+			b[i] = charset[int(b[i])%len(charset)]
+		}
+		return string(b)
+	}
+	return v
+}
+
 func CompileToSingbox(uiData UIData) (Config, error) {
 	cfg := Config{Log: &Log{Level: "info", Timestamp: true}, DNS: &DNS{Servers: []DNSServer{}}, Inbounds: []Inbound{}, Outbounds: []Outbound{{Type: "direct", Tag: "direct"}, {Type: "block", Tag: "block"}}, Route: Route{RuleSets: []RouteRuleSet{}, Rules: []RouteRule{}, Final: "direct"}}
 	byID := map[string]UINode{}
@@ -64,7 +91,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewHysteria2Inbound(tagOf(node), port, str(node.Data, "password", "change-me"), str(node.Data, "masquerade", "https://www.bing.com"), cert, key, str(node.Data, "server_name", str(node.Data, "sni", "")))
+			in := NewHysteria2Inbound(tagOf(node), port, safePassword(str(node.Data, "password", "")), str(node.Data, "masquerade", "https://www.bing.com"), cert, key, str(node.Data, "server_name", str(node.Data, "sni", "")))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-reality":
@@ -73,7 +100,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewRealityInbound(tagOf(node), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"), str(node.Data, "private_key", ""), str(node.Data, "public_key", ""), firstShortID(node.Data), dest)
+			in := NewRealityInbound(tagOf(node), port, safeUUID(str(node.Data, "uuid", "")), str(node.Data, "private_key", ""), str(node.Data, "public_key", ""), firstShortID(node.Data), dest)
 			in = withFinalMaskTransport(in, finalMaskOf(node.Data))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
@@ -86,7 +113,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewHysteriaInbound(tagOf(node), port, str(node.Data, "password", str(node.Data, "auth_str", "change-me")), num(node.Data, "up_mbps", 100), num(node.Data, "down_mbps", 100), str(node.Data, "obfs", finalMaskOf(node.Data)), cert, key)
+			in := NewHysteriaInbound(tagOf(node), port, safePassword(str(node.Data, "password", str(node.Data, "auth_str", ""))), num(node.Data, "up_mbps", 100), num(node.Data, "down_mbps", 100), str(node.Data, "obfs", finalMaskOf(node.Data)), cert, key)
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-tuic":
@@ -98,7 +125,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewTUICInbound(tagOf(node), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"), str(node.Data, "password", "change-me"), str(node.Data, "congestion_control", "cubic"), cert, key)
+			in := NewTUICInbound(tagOf(node), port, safeUUID(str(node.Data, "uuid", "")), safePassword(str(node.Data, "password", "")), str(node.Data, "congestion_control", "cubic"), cert, key)
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-naive":
@@ -110,7 +137,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewNaiveInbound(tagOf(node), port, str(node.Data, "username", "user"), str(node.Data, "password", "change-me"), str(node.Data, "network", "tcp"), str(node.Data, "quic_congestion_control", ""), cert, key)
+			in := NewNaiveInbound(tagOf(node), port, str(node.Data, "username", "user"), safePassword(str(node.Data, "password", "")), str(node.Data, "network", "tcp"), str(node.Data, "quic_congestion_control", ""), cert, key)
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-shadowtls":
@@ -118,7 +145,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewShadowTLSInbound(tagOf(node), port, str(node.Data, "password", "change-me"), str(node.Data, "server_name", str(node.Data, "sni", "www.microsoft.com")), boolVal(node.Data, "strict_mode", false), str(node.Data, "wildcard_sni", ""))
+			in := NewShadowTLSInbound(tagOf(node), port, safePassword(str(node.Data, "password", "")), str(node.Data, "server_name", str(node.Data, "sni", "www.microsoft.com")), boolVal(node.Data, "strict_mode", false), str(node.Data, "wildcard_sni", ""))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-anytls":
@@ -130,7 +157,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewAnyTLSInbound(tagOf(node), port, str(node.Data, "password", "change-me"), cert, key, stringList(node.Data, "padding_scheme"), str(node.Data, "server_name", str(node.Data, "sni", "")))
+			in := NewAnyTLSInbound(tagOf(node), port, safePassword(str(node.Data, "password", "")), cert, key, stringList(node.Data, "padding_scheme"), str(node.Data, "server_name", str(node.Data, "sni", "")))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-vmess":
@@ -138,7 +165,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewVMessInbound(tagOf(node), port, str(node.Data, "uuid", "00000000-0000-0000-0000-000000000000"),
+			in := NewVMessInbound(tagOf(node), port, safeUUID(str(node.Data, "uuid", "")),
 				str(node.Data, "network", "tcp"), str(node.Data, "path", "/"), str(node.Data, "host", ""),
 				str(node.Data, "security", "") == "tls", str(node.Data, "sni", str(node.Data, "server_name", "")))
 			in = withFinalMaskTransport(in, finalMaskOf(node.Data))
@@ -149,7 +176,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewTrojanInbound(tagOf(node), port, str(node.Data, "password", "change-me"), str(node.Data, "sni", str(node.Data, "server_name", "")))
+			in := NewTrojanInbound(tagOf(node), port, safePassword(str(node.Data, "password", "")), str(node.Data, "sni", str(node.Data, "server_name", "")))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-ss", "inbound-shadowsocks":
@@ -157,7 +184,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewShadowsocksInbound(tagOf(node), port, str(node.Data, "method", "aes-128-gcm"), str(node.Data, "password", "change-me"))
+			in := NewShadowsocksInbound(tagOf(node), port, str(node.Data, "method", "aes-128-gcm"), safePassword(str(node.Data, "password", "")))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-socks":

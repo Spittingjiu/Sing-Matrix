@@ -6,3 +6,6 @@ config.json
 config_test.json
 certs/
 data/
+jwt.secret
+*.secret
+*.test
