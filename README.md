@@ -292,3 +292,17 @@ docs/                   API、部署、产品说明
 ## 许可
 
 MIT
+
+
+---
+
+## ⚡ 内置 Aero 加速引擎与长连接保活 (Sing-Matrix Accelerator)
+
+S-Matrix 内置伴生极速预热引擎，自动常驻守护，无需额外进程：
+
+* **默认端口**：UDP `39999`（可通过环境变量 `SMATRIX_ACCEL_PORT` 自定义）。
+* **极速预热**：客户端（如 AeroProxy）连接后发射 `SMTX` 激活包，服务端自动对 Google、YouTube、OpenAI、Claude、Telegram、Twitter/X、GitHub 等全矩阵主流出海服务发起 DNS 预解析与 TCP 预握手，降低客户端首包 RTT。
+* **资源与网络保护**：
+  * **并发与连接保护**：严格限制最大 15 个长连接活跃池，在对端 Anti-DDoS 超时前优雅滚动释放。
+  * **防内存泄露**：客户端静默 45 秒无心跳自动超时回收，零 GC 负担。
+  * **保留端口规避**：节点生成器自动避让 `22` (SSH)、`53` (DNS)、`80` (HTTP)、`443` (HTTPS)、`19088` (面板)、`39999` (加速引擎)。
