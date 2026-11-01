@@ -152,6 +152,7 @@ seed_credentials() {
   if [ -f "${creds}" ]; then
     ok "保留已有面板账号（${creds}）"
     PANEL_PASS="$(sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${creds}")"
+    [ -z "${PANEL_PASS}" ] && PANEL_PASS="[已加密存储]"
     PANEL_USER="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${creds}")"
     return 0
   fi
