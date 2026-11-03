@@ -21,6 +21,10 @@ const (
 	CmdHeartbeat byte = 0x02
 	CmdSleep     byte = 0x03
 	CmdPing      byte = 0x04
+	CmdPong      byte = 0x84
+
+	// PongPacketWireLength: 48 bytes
+	PongPacketWireLength = 48
 
 	// PacketWireLength: Magic(4) + Ver(1) + Cmd(1) + Timestamp(4) + Nonce(4) + KeyID(2) + HMAC(16) = 32 bytes
 	PacketWireLength = 32

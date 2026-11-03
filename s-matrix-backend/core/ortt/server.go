@@ -2,9 +2,12 @@ package ortt
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +25,8 @@ type Server struct {
 	replayCache *ReplayCache
 	sessions    sync.Map // string -> *ClientSession
 	udpConn     net.PacketConn
+	httpServer  *http.Server
+	prewarming  atomic.Bool
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
@@ -127,6 +132,24 @@ func (s *Server) Run() error {
 	log.Printf("[ORTT] 🛡️ ORTT 0-RTT 极速预热与保活引擎 v2.0 已就绪 (UDP 控制: :%d, SOCKS5 复用池: 127.0.0.1:%d)", s.cfg.ControlPort, s.cfg.ForwardPort)
 	log.Printf("[ORTT] 🔐 HMAC-SHA256 签名鉴权与防重放机制已激活，保护 %d 个核心站点与全球 CDN 矩阵", len(s.cfg.TargetDomains))
 
+	// 3. Start Local HTTP Stats Listener on 127.0.0.1:39999
+	httpMux := http.NewServeMux()
+	statsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(GetStats())
+	})
+	httpMux.Handle("/api/v1/ortt/stats", statsHandler)
+	httpMux.Handle("/ortt/stats", statsHandler)
+
+	httpServer := &http.Server{
+		Addr:    fmt.Sprintf("127.0.0.1:%d", s.cfg.ControlPort),
+		Handler: httpMux,
+	}
+	s.httpServer = httpServer
+	go func() {
+		_ = httpServer.ListenAndServe()
+	}()
+
 	// Background session cleaner & pre-warmer
 	s.wg.Add(2)
 	go s.udpListenLoop()
@@ -170,11 +193,112 @@ func (s *Server) udpListenLoop() {
 			continue
 		}
 
-		s.handleCommand(cmd, remoteAddr.String())
+		s.handleCommand(cmd, remoteAddr, buf[:n])
 	}
 }
 
-func (s *Server) handleCommand(cmd byte, clientAddr string) {
+func (s *Server) triggerAsyncPrewarm() {
+	if s.prewarming.CompareAndSwap(false, true) {
+		go func() {
+			defer s.prewarming.Store(false)
+			s.prewarmPool()
+		}()
+	}
+}
+
+func (s *Server) checkDataPlaneStatus() uint8 {
+	var flags uint8 = 0
+
+	// Bit 0 (0x01): 127.0.0.1:39998 SOCKS5 is listening
+	if s.forwarder != nil && s.forwarder.IsListening() {
+		flags |= 0x01
+	}
+
+	// Bit 1 (0x02): Proxy engine (sing-box or xray) is running and configured with 39998
+	if isProxyConfiguredAndRunning() {
+		flags |= 0x02
+	}
+
+	// Bit 2 (0x04): Active warm conns > 0
+	if atomic.LoadInt64(&GlobalStats.ActiveWarmConns) > 0 {
+		flags |= 0x04
+	}
+
+	return flags
+}
+
+func isProxyConfiguredAndRunning() bool {
+	// 1. Check if sing-box or xray process is running in /proc
+	proxyRunning := false
+	entries, err := os.ReadDir("/proc")
+	if err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			cmdlineBytes, err := os.ReadFile("/proc/" + e.Name() + "/cmdline")
+			if err != nil {
+				continue
+			}
+			cmdline := string(cmdlineBytes)
+			if strings.Contains(cmdline, "sing-box") || strings.Contains(cmdline, "xray") {
+				proxyRunning = true
+				break
+			}
+		}
+	}
+
+	if !proxyRunning {
+		return false
+	}
+
+	// 2. Check if any active proxy config has 39998 or ortt-warm-pool
+	cfgPaths := []string{
+		"/opt/sing-matrix/data/config.json",
+		"/usr/local/etc/xray/config.json",
+		"/etc/sui-xray/config.json",
+	}
+
+	for _, p := range cfgPaths {
+		data, err := os.ReadFile(p)
+		if err == nil {
+			content := string(data)
+			if strings.Contains(content, "39998") || strings.Contains(content, "ortt-warm-pool") {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (s *Server) buildPongPacket(nonceBytes []byte) []byte {
+	pong := make([]byte, 48)
+	copy(pong[0:4], Magic)       // "ORTT"
+	pong[4] = ProtocolVersion     // 0x02
+	pong[5] = CmdPong             // 0x84
+	copy(pong[6:10], nonceBytes) // Echo Nonce (4 bytes)
+
+	hits := uint32(atomic.LoadInt64(&GlobalStats.PoolHits))
+	misses := uint32(atomic.LoadInt64(&GlobalStats.PoolMisses))
+	warmConns := uint16(atomic.LoadInt64(&GlobalStats.ActiveWarmConns))
+	dropped := uint32(atomic.LoadInt64(&GlobalStats.PacketsDropped))
+
+	binary.BigEndian.PutUint32(pong[10:14], hits)
+	binary.BigEndian.PutUint32(pong[14:18], misses)
+	binary.BigEndian.PutUint16(pong[18:20], warmConns)
+	binary.BigEndian.PutUint32(pong[20:24], dropped)
+
+	pong[24] = s.checkDataPlaneStatus()
+	// pong[25:32] are reserved zero bytes
+
+	sig := ComputeHMAC(s.cfg.SecretKey, pong[:32])
+	copy(pong[32:48], sig)
+	return pong
+}
+
+func (s *Server) handleCommand(cmd byte, remoteAddr net.Addr, rawReq []byte) {
+	clientAddr := remoteAddr.String()
 	now := time.Now()
 	val, loaded := s.sessions.Load(clientAddr)
 	var sess *ClientSession
@@ -188,8 +312,13 @@ func (s *Server) handleCommand(cmd byte, clientAddr string) {
 	switch cmd {
 	case CmdWakeup:
 		if sess.TouchWakeup(now) {
-			log.Printf("[ORTT] ⚡ 客户端 [%s] 鉴权成功激活，预热核心目标连接池", clientAddr)
-			s.prewarmPool()
+			log.Printf("[ORTT] ⚡ 客户端 [%s] 鉴权成功激活，异步预热核心目标连接池", clientAddr)
+			s.triggerAsyncPrewarm()
+		}
+		if len(rawReq) >= 14 && s.udpConn != nil {
+			nonce := rawReq[10:14]
+			pong := s.buildPongPacket(nonce)
+			_, _ = s.udpConn.WriteTo(pong, remoteAddr)
 		}
 
 	case CmdHeartbeat:
@@ -201,6 +330,14 @@ func (s *Server) handleCommand(cmd byte, clientAddr string) {
 
 	case CmdPing:
 		sess.TouchActive(now)
+		if atomic.LoadInt64(&GlobalStats.ActiveWarmConns) == 0 {
+			s.triggerAsyncPrewarm()
+		}
+		if len(rawReq) >= 14 && s.udpConn != nil {
+			nonce := rawReq[10:14]
+			pong := s.buildPongPacket(nonce)
+			_, _ = s.udpConn.WriteTo(pong, remoteAddr)
+		}
 	}
 }
 
@@ -248,6 +385,9 @@ func (s *Server) sessionWorker() {
 
 func (s *Server) Close() {
 	s.cancel()
+	if s.httpServer != nil {
+		_ = s.httpServer.Close()
+	}
 	if s.udpConn != nil {
 		_ = s.udpConn.Close()
 	}

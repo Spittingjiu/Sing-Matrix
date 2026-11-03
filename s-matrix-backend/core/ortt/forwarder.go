@@ -231,3 +231,7 @@ func (f *LocalForwarder) Close() {
 	}
 	f.wg.Wait()
 }
+
+func (f *LocalForwarder) IsListening() bool {
+	return f != nil && f.listener != nil
+}
