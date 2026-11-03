@@ -34,7 +34,14 @@ func TestCustomAANodeCompilesAsOutbound(t *testing.T) {
 	if os.Getenv("ORTT_ENABLED") != "false" && os.Getenv("ORTT_ENABLED") != "0" {
 		expectedRules = 2
 	}
-	if len(cfg.Route.Rules) != expectedRules || cfg.Route.Rules[0].Outbound != "AA" {
+	if len(cfg.Route.Rules) != expectedRules {
+		t.Fatalf("expected %d rules, got: %+v", expectedRules, cfg.Route.Rules)
+	}
+	aaIndex := 0
+	if expectedRules == 2 {
+		aaIndex = 1
+	}
+	if cfg.Route.Rules[aaIndex].Outbound != "AA" {
 		t.Fatalf("AA route not generated: %+v", cfg.Route.Rules)
 	}
 }
