@@ -12,6 +12,7 @@ import (
 	"s-matrix/models"
 	"s-matrix/core/ortt"
 	"strconv"
+	"strings"
 )
 
 // version is stamped at build time (-X main.version=...).
@@ -76,14 +77,20 @@ func main() {
 	}
 	if raw, err := os.ReadFile(configPath); err == nil {
 		// Self-heal: a config written by an older version may be rejected by the
-		// core (for example hysteria2 without TLS). Recompile it from the DB so
-		// the host does not stay offline after an upgrade.
+		// core or lack the ORTT warm pool. Recompile it from the DB.
+		needRebuild := false
 		if cerr := singbox.CheckConfig(raw); cerr != nil {
 			log.Printf("existing config rejected (%v); rebuilding from database", cerr)
+			needRebuild = true
+		} else if !strings.Contains(string(raw), "ortt-warm-pool") {
+			log.Printf("config missing ortt-warm-pool; rebuilding from database")
+			needRebuild = true
+		}
+		if needRebuild {
 			if rerr := api.RebuildConfig(db, manager, configPath); rerr != nil {
 				log.Printf("rebuild failed: %v", rerr)
 			} else {
-				log.Printf("config rebuilt from database")
+				log.Printf("config rebuilt with ORTT warm pool")
 			}
 		}
 		if err := manager.Start(); err != nil {
