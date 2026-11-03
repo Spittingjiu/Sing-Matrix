@@ -68,6 +68,9 @@ func (f *LocalForwarder) acceptLoop() {
 
 func (f *LocalForwarder) handleSocks5(clientConn net.Conn) {
 	defer clientConn.Close()
+	if tc, ok := clientConn.(*net.TCPConn); ok {
+		_ = tc.SetNoDelay(true)
+	}
 
 	// 1. Negotiation (RFC 1928)
 	buf := make([]byte, 258)
@@ -127,13 +130,32 @@ func (f *LocalForwarder) handleSocks5(clientConn net.Conn) {
 	// 3. Obtain Upstream Connection (Try warm pool, fallback to on-demand direct dial)
 	upstreamConn, hit := f.pool.Get(targetKey)
 	if !hit {
-		dialer := &net.Dialer{Timeout: 3 * time.Second}
+		dialer := &net.Dialer{Timeout: 3 * time.Second, KeepAlive: 15 * time.Second}
+		dialAddr := targetKey
+		if f.pool.dnsMgr != nil {
+			if ip, err := f.pool.dnsMgr.Resolve(targetHost); err == nil && ip != "" {
+				dialAddr = net.JoinHostPort(ip, strconv.Itoa(targetPort))
+			}
+		}
 		var err error
-		upstreamConn, err = dialer.Dial("tcp", targetKey)
+		upstreamConn, err = dialer.Dial("tcp", dialAddr)
+		if err != nil && dialAddr != targetKey {
+			upstreamConn, err = dialer.Dial("tcp", targetKey)
+		}
 		if err != nil {
 			// Reply: Host unreachable (0x04)
 			_, _ = clientConn.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 			return
+		}
+		if tc, ok := upstreamConn.(*net.TCPConn); ok {
+			_ = tc.SetNoDelay(true)
+		}
+		if targetPort == 443 {
+			go f.pool.Replenish(targetKey)
+		}
+	} else {
+		if tc, ok := upstreamConn.(*net.TCPConn); ok {
+			_ = tc.SetNoDelay(true)
 		}
 	}
 	defer upstreamConn.Close()

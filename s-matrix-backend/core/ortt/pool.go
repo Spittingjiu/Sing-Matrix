@@ -83,7 +83,7 @@ func (p *UpstreamSocketPool) Get(targetKey string) (net.Conn, bool) {
 		atomic.StoreInt64(&GlobalStats.ActiveWarmConns, int64(p.currentTotal))
 
 		// Check staleness (max 15s warm life to prevent remote server idle termination)
-		if time.Since(ws.createdAt) > 15*time.Second {
+		if time.Since(ws.createdAt) > 45*time.Second {
 			_ = ws.conn.Close()
 			list = p.pools[key]
 			continue
@@ -202,7 +202,7 @@ func (p *UpstreamSocketPool) audit() {
 	for key, list := range p.pools {
 		var active []*warmSocket
 		for _, ws := range list {
-			if now.Sub(ws.createdAt) > 15*time.Second {
+			if now.Sub(ws.createdAt) > 45*time.Second {
 				_ = ws.conn.Close()
 				p.currentTotal--
 				continue

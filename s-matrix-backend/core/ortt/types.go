@@ -83,10 +83,10 @@ func DefaultConfig() *Config {
 			"www.reddit.com", "discord.com", "gateway.discord.gg",
 			"www.wikipedia.org", "store.steampowered.com",
 		},
-		MaxWarmPerDomain: 2,
-		MaxTotalSockets:  96,
-		ReplenishDelay:   80 * time.Millisecond,
-		IdleTimeout:      15 * time.Second,
+		MaxWarmPerDomain: 4,
+		MaxTotalSockets:  160,
+		ReplenishDelay:   30 * time.Millisecond,
+		IdleTimeout:      45 * time.Second,
 		SessionExpire:    45 * time.Second,
 	}
 }

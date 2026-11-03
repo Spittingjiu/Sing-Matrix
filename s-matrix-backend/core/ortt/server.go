@@ -217,7 +217,7 @@ func (s *Server) prewarmPool() {
 
 func (s *Server) sessionWorker() {
 	defer s.wg.Done()
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(12 * time.Second)
 	defer ticker.Stop()
 
 	for {
