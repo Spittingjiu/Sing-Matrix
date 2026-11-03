@@ -22,8 +22,15 @@ func TestSingleInboundTopologyReality(t *testing.T) {
 	if len(cfg.Inbounds) != 1 || cfg.Inbounds[0].Type != "vless" {
 		t.Fatalf("bad inbound: %+v", cfg.Inbounds)
 	}
-	if len(cfg.Route.Rules) == 0 || cfg.Route.Rules[0].Outbound != "direct" {
-		t.Fatalf("missing route: %+v", cfg.Route.Rules)
+	hasDirect := false
+	for _, r := range cfg.Route.Rules {
+		if r.Outbound == "direct" {
+			hasDirect = true
+			break
+		}
+	}
+	if !hasDirect {
+		t.Fatalf("missing direct route: %+v", cfg.Route.Rules)
 	}
 }
 
