@@ -9,7 +9,7 @@ import (
 
 var portMutex sync.Mutex
 
-// Reserved system, sing-box default and accelerator ports to avoid collision
+// Reserved system, sing-box default and ORTT engine ports to avoid collision
 var ReservedPorts = map[int]bool{
 	22:    true, // SSH
 	53:    true, // DNS
@@ -20,8 +20,8 @@ var ReservedPorts = map[int]bool{
 	10809: true, // HTTP Inbound
 	10810: true, // TProxy Inbound
 	19088: true, // Sing-Matrix Panel Web UI
-	39998: true, // Sing-Matrix Accelerator SOCKS5 Forwarder (127.0.0.1)
-	39999: true, // Sing-Matrix Accelerator Control UDP
+	39998: true, // ORTT Engine SOCKS5 Local Forwarder (127.0.0.1)
+	39999: true, // ORTT Engine Control UDP
 }
 
 func IsPortAvailable(port int) bool {

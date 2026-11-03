@@ -1,4 +1,4 @@
-package accelerator
+package ortt
 
 import (
 	"bytes"
@@ -56,12 +56,21 @@ func (c *ReplayCache) CheckAndAdd(nonce uint32, now time.Time) bool {
 
 // VerifyPacket parses, authenticates, and validates a received v2 control packet (32 bytes wire length)
 func VerifyPacket(secret []byte, raw []byte, cache *ReplayCache) (byte, uint32, uint16, error) {
+	keyRing := map[uint16][]byte{
+		1: []byte(DefaultPSK),
+		2: []byte(LegacyPSK),
+	}
+	return VerifyPacketWithKeys(keyRing, secret, raw, cache)
+}
+
+// VerifyPacketWithKeys authenticates raw packet against key ring, primary secret, or fallback
+func VerifyPacketWithKeys(keyRing map[uint16][]byte, defaultSecret []byte, raw []byte, cache *ReplayCache) (byte, uint32, uint16, error) {
 	if len(raw) < PacketWireLength {
 		return 0, 0, 0, ErrPacketTooShort
 	}
 
-	// 1. Magic header check (4 bytes)
-	if !bytes.Equal(raw[:4], Magic) {
+	// 1. Magic header check (accepts "ORTT" or "SMTX")
+	if !bytes.Equal(raw[:4], Magic) && !bytes.Equal(raw[:4], LegacyMagic) {
 		return 0, 0, 0, ErrInvalidMagic
 	}
 
@@ -89,11 +98,46 @@ func VerifyPacket(secret []byte, raw []byte, cache *ReplayCache) (byte, uint32, 
 		}
 	}
 
-	// 5. HMAC-SHA256 signature verification (constant time over raw[:16])
-	expectedSig := ComputeHMAC(secret, raw[:16])
+	// 5. HMAC-SHA256 signature verification with multi-key fallback
 	actualSig := raw[16:32]
+	var matchedKey []byte
 
-	if !hmac.Equal(expectedSig, actualSig) {
+	// 5.1 Try KeyRing by KeyID
+	if keyRing != nil && keyRing[keyID] != nil {
+		expectedSig := ComputeHMAC(keyRing[keyID], raw[:16])
+		if hmac.Equal(expectedSig, actualSig) {
+			matchedKey = keyRing[keyID]
+		}
+	}
+
+	// 5.2 Try defaultSecret if not matched yet
+	if matchedKey == nil && len(defaultSecret) > 0 {
+		expectedSig := ComputeHMAC(defaultSecret, raw[:16])
+		if hmac.Equal(expectedSig, actualSig) {
+			matchedKey = defaultSecret
+		}
+	}
+
+	// 5.3 Fallback: iterate remaining keys in keyRing
+	if matchedKey == nil && keyRing != nil {
+		for _, candidate := range keyRing {
+			expectedSig := ComputeHMAC(candidate, raw[:16])
+			if hmac.Equal(expectedSig, actualSig) {
+				matchedKey = candidate
+				break
+			}
+		}
+	}
+
+	// 5.4 Fallback: try built-in legacy secret
+	if matchedKey == nil {
+		expectedSig := ComputeHMAC([]byte(LegacyPSK), raw[:16])
+		if hmac.Equal(expectedSig, actualSig) {
+			matchedKey = []byte(LegacyPSK)
+		}
+	}
+
+	if matchedKey == nil {
 		return 0, 0, 0, ErrHMACMismatch
 	}
 

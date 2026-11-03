@@ -296,13 +296,25 @@ MIT
 
 ---
 
-## ⚡ 内置 Aero 加速引擎与长连接保活 (Sing-Matrix Accelerator)
+## ⚡ 内置 ORTT 极速预热与保活引擎 (0-RTT Prewarm & Keepalive Engine)
 
-S-Matrix 内置伴生极速预热引擎，自动常驻守护，无需额外进程：
+S-Matrix 是现代化的轻量级节点管理面板，而 **ORTT (0-RTT Prewarm & Keepalive Engine)** 是深度内置于节点服务端的伴生网络加速与热连接保活引擎，专为消除首包往返延迟而生。
 
-* **默认端口**：UDP `39999`（可通过环境变量 `SMATRIX_ACCEL_PORT` 自定义）。
-* **极速预热**：客户端（如 AeroProxy）连接后发射 `SMTX` 激活包，服务端自动对 Google、YouTube、OpenAI、Claude、Telegram、Twitter/X、GitHub 等全矩阵主流出海服务发起 DNS 预解析与 TCP 预握手，降低客户端首包 RTT。
-* **资源与网络保护**：
-  * **并发与连接保护**：严格限制最大 15 个长连接活跃池，在对端 Anti-DDoS 超时前优雅滚动释放。
-  * **防内存泄露**：客户端静默 45 秒无心跳自动超时回收，零 GC 负担。
-  * **保留端口规避**：节点生成器自动避让 `22` (SSH)、`53` (DNS)、`80` (HTTP)、`443` (HTTPS)、`19088` (面板)、`39999` (加速引擎)。
+### 🌟 核心特性与技术架构
+* **端口与拓扑**：
+  * **控制与心跳端口**：UDP `39999`（可通过环境变量 `ORTT_PORT` 自定义），用于接收 OpenAero 路由器 / AeroProxy 客户端发送的加密鉴权与心跳指令。
+  * **本地预热池转发出站**：TCP `127.0.0.1:39998`（SOCKS5 协议），由 `sing-box` 路由规则将出站端口 443 的 TCP 连接无缝分流至此。
+* **零往返 (0-RTT) 预热矩阵**：
+  * 引擎启动并经由客户端激活后，后台实时维护一个动态热连接池（Socket Pool）。
+  * **全球核心 CDN 节点 (16 个)**：Cloudflare (`www.cloudflare.com`, `cdnjs.cloudflare.com`, `one.one.one.one`)、Google/Gstatic (`www.gstatic.com`, `fonts.gstatic.com`, `gvt1.com`, `gvt2.com`, `yt3.ggpht.com`, `i.ytimg.com`)、GitHub Assets (`github.githubassets.com`, `raw.githubusercontent.com`, `avatars.githubusercontent.com`)、Twitter CDN (`abs.twimg.com`, `pbs.twimg.com`)、OpenAI CDN (`cdn.oaistatic.com`)、jsDelivr (`cdn.jsdelivr.net`)。
+  * **AI 与生产力平台 (8 个)**：ChatGPT (`chatgpt.com`, `api.openai.com`)、Claude (`claude.ai`, `api.anthropic.com`)、Gemini (`gemini.google.com`, `aistudio.google.com`)、Perplexity (`www.perplexity.ai`)、Notion (`www.notion.so`)。
+  * **高频媒体、社交与搜索 (16 个)**：Google 搜索、YouTube (`www.youtube.com`, `m.youtube.com`, `googlevideo.com`)、GitHub (`github.com`, `api.github.com`)、X / Twitter (`x.com`, `api.x.com`)、Telegram (`core.telegram.org`, `web.telegram.org`, `t.me`)、Reddit、Discord (`discord.com`, `gateway.discord.gg`)、Wikipedia、Steam。
+  * 当用户发起 HTTPS (TCP 443) 请求时，预热池中已就绪的 TLS/TCP 连接直接接管，实现 **0-RTT** 极速首包响应；若未命中，自动由本地 LocalForwarder 毫秒级直接回退建立连接。
+* **v2.0 32B HMAC 安全鉴权协议**：
+  * **Magic**：`ORTT`（0x4F, 0x52, 0x54, 0x54），向后兼容支持 `SMTX`（0x53, 0x4D, 0x54, 0x58）。
+  * **PSK 密钥协商**：默认预共享密钥为 `ortt-default-psk-2026`，内置 KeyRing 具备自动向后兼容 fallback 密钥 `openaero-matrix-secret-2026`。
+  * 支持重放保护（Replay Window 60s）、会话静默防扫描、基于令牌桶的 Anti-DDoS 动态限速与 45 秒未活跃自动 GC 回收。
+* **环境变量配置**：
+  * `ORTT_ENABLED`：是否启用预热引擎（默认为 `true`，设为 `false` 可完全关闭）。
+  * `ORTT_PORT`：UDP 控制监听端口（默认 `39999`）。
+  * `ORTT_SECRET`：自定义 PSK 鉴权密钥。

@@ -1,4 +1,4 @@
-package accelerator
+package ortt
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,7 +38,7 @@ func NewServer(cfg *Config) *Server {
 	dnsMgr := NewDNSManager(5 * time.Minute)
 	pool := NewUpstreamSocketPool(cfg.MaxWarmPerDomain, cfg.MaxTotalSockets, dnsMgr)
 	forwarder := NewLocalForwarder(cfg.ForwardPort, pool)
-	limiter := NewRateLimiter(30.0, 2.0) // 30 global rps, 2 rps per IP
+	limiter := NewRateLimiter(50.0, 5.0) // 50 global rps, 5 rps per IP
 	replayCache := NewReplayCache()
 
 	return &Server{
@@ -51,36 +53,51 @@ func NewServer(cfg *Config) *Server {
 	}
 }
 
-// Start launches the accelerator server if enabled
-func Start(port int) {
-	enabled := os.Getenv("SMATRIX_ACCEL_ENABLED")
-	if enabled != "true" && enabled != "1" {
-		log.Printf("[accelerator] Sing-Matrix 极速预热引擎未启用 (如需开启请设置 SMATRIX_ACCEL_ENABLED=true)")
-		return
+// Start launches the ORTT server if enabled (default enabled)
+func Start(port int) error {
+	enabled := strings.ToLower(strings.TrimSpace(os.Getenv("ORTT_ENABLED")))
+	if enabled == "" {
+		enabled = strings.ToLower(strings.TrimSpace(os.Getenv("SMATRIX_ACCEL_ENABLED")))
+	}
+	if enabled == "false" || enabled == "0" {
+		log.Printf("[ORTT] 0-RTT 极速预热与保活引擎已显式停用 (ORTT_ENABLED=false)")
+		return nil
 	}
 
 	if port <= 0 {
-		log.Printf("[accelerator] 控制端口设为 %d，加速引擎已停用", port)
-		return
+		portStr := os.Getenv("ORTT_PORT")
+		if portStr == "" {
+			portStr = os.Getenv("SMATRIX_ACCEL_PORT")
+		}
+		port, _ = strconv.Atoi(portStr)
+		if port <= 0 {
+			port = 39999
+		}
 	}
 
 	cfg := DefaultConfig()
 	cfg.Enabled = true
 	cfg.ControlPort = port
 
-	secret := os.Getenv("SMATRIX_ACCEL_SECRET")
+	secret := os.Getenv("ORTT_SECRET")
+	if secret == "" {
+		secret = os.Getenv("SMATRIX_ACCEL_SECRET")
+	}
 	if secret != "" {
 		cfg.SecretKey = []byte(secret)
+		cfg.KeyRing[1] = []byte(secret)
 	}
 
 	globalServer = NewServer(cfg)
 	if err := globalServer.Run(); err != nil {
-		log.Printf("[accelerator] 启动失败: %v", err)
+		log.Printf("[ORTT] 启动失败: %v", err)
+		return err
 	}
+	return nil
 }
 
 func (s *Server) Run() error {
-	// 1. Start Local Forwarder on 127.0.0.1:39998
+	// 1. Start Local Forwarder on 127.0.0.1:39998 (synchronously before sing-box launches)
 	if err := s.forwarder.Start(); err != nil {
 		return err
 	}
@@ -90,19 +107,19 @@ func (s *Server) Run() error {
 	conn, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		s.forwarder.Close()
-		return fmt.Errorf("control listener bind %s failed: %w", addr, err)
+		return fmt.Errorf("ortt control listener bind %s failed: %w", addr, err)
 	}
 	s.udpConn = conn
 
-	log.Printf("[accelerator] 🛡️ Sing-Matrix 伴生加速引擎 v2.0 已就绪 (UDP 控制: :%d, SOCKS5 复用池: 127.0.0.1:%d)", s.cfg.ControlPort, s.cfg.ForwardPort)
-	log.Printf("[accelerator] 🔐 HMAC-SHA256 签名鉴权与防重放机制已激活，保护目标站点: %v", s.cfg.TargetDomains)
+	log.Printf("[ORTT] 🛡️ ORTT 0-RTT 极速预热与保活引擎 v2.0 已就绪 (UDP 控制: :%d, SOCKS5 复用池: 127.0.0.1:%d)", s.cfg.ControlPort, s.cfg.ForwardPort)
+	log.Printf("[ORTT] 🔐 HMAC-SHA256 签名鉴权与防重放机制已激活，保护 %d 个核心站点与全球 CDN 矩阵", len(s.cfg.TargetDomains))
 
 	// Background session cleaner & pre-warmer
 	s.wg.Add(2)
 	go s.udpListenLoop()
 	go s.sessionWorker()
 
-	// Initial prefetch
+	// Initial DNS prefetch
 	s.dnsMgr.PrefetchDomains(s.cfg.TargetDomains)
 
 	return nil
@@ -133,8 +150,8 @@ func (s *Server) udpListenLoop() {
 			continue
 		}
 
-		// Cryptographic authentication & replay check
-		cmd, _, _, err := VerifyPacket(s.cfg.SecretKey, buf[:n], s.replayCache)
+		// Cryptographic authentication & replay check with multi-key support
+		cmd, _, _, err := VerifyPacketWithKeys(s.cfg.KeyRing, s.cfg.SecretKey, buf[:n], s.replayCache)
 		if err != nil {
 			atomic.AddInt64(&GlobalStats.PacketsDropped, 1)
 			continue
@@ -158,7 +175,7 @@ func (s *Server) handleCommand(cmd byte, clientAddr string) {
 	switch cmd {
 	case CmdWakeup:
 		if sess.TouchWakeup(now) {
-			log.Printf("[accelerator] ⚡ 客户端 [%s] 鉴权成功激活，预热目标连接池", clientAddr)
+			log.Printf("[ORTT] ⚡ 客户端 [%s] 鉴权成功激活，预热核心目标连接池", clientAddr)
 			s.prewarmPool()
 		}
 
@@ -166,7 +183,7 @@ func (s *Server) handleCommand(cmd byte, clientAddr string) {
 		sess.TouchActive(now)
 
 	case CmdSleep:
-		log.Printf("[accelerator] 💤 客户端 [%s] 正常休眠", clientAddr)
+		log.Printf("[ORTT] 💤 客户端 [%s] 正常休眠", clientAddr)
 		s.sessions.Delete(clientAddr)
 
 	case CmdPing:
@@ -176,7 +193,12 @@ func (s *Server) handleCommand(cmd byte, clientAddr string) {
 
 func (s *Server) prewarmPool() {
 	for _, domain := range s.cfg.TargetDomains {
-		go s.pool.Replenish(domain)
+		go func(d string) {
+			s.pool.Replenish(d)
+		}(domain)
+		if s.cfg.ReplenishDelay > 0 {
+			time.Sleep(s.cfg.ReplenishDelay)
+		}
 	}
 }
 

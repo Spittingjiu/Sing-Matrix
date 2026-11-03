@@ -12,8 +12,8 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"gorm.io/gorm"
 	"s-matrix/core/acme"
-	"s-matrix/core/accelerator
-	"s-matrix/core/singbox""
+	"s-matrix/core/ortt"
+	"s-matrix/core/singbox"
 	"s-matrix/models"
 )
 
@@ -44,7 +44,8 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	v1.GET("/discover", DiscoveryHandler(dep.ConfigPath))
 	secured := v1.Group("")
 	secured.Use(JWTMiddleware())
-	secured.GET("/accelerator/stats", func(c *gin.Context) { c.JSON(http.StatusOK, accelerator.GetStats()) })
+	secured.GET("/ortt/stats", func(c *gin.Context) { c.JSON(http.StatusOK, ortt.GetStats()) })
+	secured.GET("/accelerator/stats", func(c *gin.Context) { c.JSON(http.StatusOK, ortt.GetStats()) })
 	secured.GET("/singbox/test-config", func(c *gin.Context) { c.JSON(http.StatusOK, singbox.BuildTestConfig()) })
 	secured.GET("/singbox/share-links", ShareLinksHandler(dep.ConfigPath))
 	secured.GET("/logs/ws", LogsWSHandler(dep.LogPath))

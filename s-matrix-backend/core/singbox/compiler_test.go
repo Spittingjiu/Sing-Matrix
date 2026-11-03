@@ -27,8 +27,17 @@ func TestCompileToSingbox(t *testing.T) {
 	if len(cfg.Inbounds) != 1 || cfg.Inbounds[0].Tag != "hy2-main" {
 		t.Fatalf("bad inbounds: %+v", cfg.Inbounds)
 	}
-	if len(cfg.Route.Rules) != 1 || cfg.Route.Rules[0].Inbound != "hy2-main" || cfg.Route.Rules[0].RuleSet != "youtube" || cfg.Route.Rules[0].Outbound != "direct" {
+	expectedRules := 1
+	if os.Getenv("ORTT_ENABLED") != "false" && os.Getenv("ORTT_ENABLED") != "0" {
+		expectedRules = 2
+	}
+	if len(cfg.Route.Rules) != expectedRules || cfg.Route.Rules[0].Inbound != "hy2-main" || cfg.Route.Rules[0].RuleSet != "youtube" || cfg.Route.Rules[0].Outbound != "direct" {
 		t.Fatalf("bad route: %+v", cfg.Route)
+	}
+	if expectedRules == 2 {
+		if cfg.Route.Rules[1].Outbound != "ortt-warm-pool" || cfg.Route.Rules[1].Network != "tcp" || len(cfg.Route.Rules[1].Port) != 1 || cfg.Route.Rules[1].Port[0] != 443 {
+			t.Fatalf("bad ortt route: %+v", cfg.Route.Rules[1])
+		}
 	}
 	path := filepath.Join(dir, "config.json")
 	defer os.Remove(path)

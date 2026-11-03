@@ -10,7 +10,7 @@ import (
 	"s-matrix/core/acme"
 	"s-matrix/core/singbox"
 	"s-matrix/models"
-	"s-matrix/core/accelerator"
+	"s-matrix/core/ortt"
 	"strconv"
 )
 
@@ -48,9 +48,11 @@ func main() {
 		log.Fatalf("generate test config failed: %v", err)
 	}
 	log.Printf("s-matrix backend listening on %s", addr)
-	accelPortStr := env("SMATRIX_ACCEL_PORT", "39999")
-	accelPort, _ := strconv.Atoi(accelPortStr)
-	go accelerator.Start(accelPort)
+	orttPortStr := env("ORTT_PORT", env("SMATRIX_ACCEL_PORT", "39999"))
+	orttPort, _ := strconv.Atoi(orttPortStr)
+	if err := ortt.Start(orttPort); err != nil {
+		log.Printf("[ORTT] start warning: %v", err)
+	}
 
 	// Certificates are obtained over HTTP-01 only: the operator points a domain
 	// at this host, and the panel proves control by serving a token on port 80.

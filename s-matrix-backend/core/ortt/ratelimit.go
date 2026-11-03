@@ -1,4 +1,4 @@
-package accelerator
+package ortt
 
 import (
 	"sync"

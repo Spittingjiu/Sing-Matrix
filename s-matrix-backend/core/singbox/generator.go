@@ -66,8 +66,11 @@ type User struct {
 }
 
 type Outbound struct {
-	Type string `json:"type"`
-	Tag  string `json:"tag"`
+	Type       string `json:"type"`
+	Tag        string `json:"tag"`
+	Server     string `json:"server,omitempty"`
+	ServerPort int    `json:"server_port,omitempty"`
+	Version    string `json:"version,omitempty"`
 }
 
 type Route struct {
@@ -87,6 +90,8 @@ type RouteRule struct {
 	Inbound  string `json:"inbound,omitempty"`
 	RuleSet  string `json:"rule_set,omitempty"`
 	Outbound string `json:"outbound"`
+	Network  string `json:"network,omitempty"`
+	Port     []int  `json:"port,omitempty"`
 }
 
 func NewRealityInbound(tag string, port int, uuid string, privateKey string, publicKey string, shortID string, serverName string) Inbound {

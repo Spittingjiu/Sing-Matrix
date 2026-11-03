@@ -194,6 +194,8 @@ Environment=SMATRIX_SINGBOX_LOG=${DATA_DIR}/singbox.log
 Environment=SMATRIX_SINGBOX_BIN=/usr/local/bin/sing-box
 Environment=SMATRIX_ACME_WEBROOT=${WEBROOT}
 Environment=GIN_MODE=release
+Environment=ORTT_ENABLED=true
+Environment=ORTT_PORT=39999
 EnvironmentFile=-${DATA_DIR}/env
 ExecStart=${BIN}
 Restart=always

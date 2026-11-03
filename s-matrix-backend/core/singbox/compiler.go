@@ -245,6 +245,21 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			}
 		}
 	}
+	orttEnabled := os.Getenv("ORTT_ENABLED") != "false" && os.Getenv("ORTT_ENABLED") != "0"
+	if orttEnabled {
+		cfg.Outbounds = append(cfg.Outbounds, Outbound{
+			Type:       "socks",
+			Tag:        "ortt-warm-pool",
+			Server:     "127.0.0.1",
+			ServerPort: 39998,
+			Version:    "5",
+		})
+		cfg.Route.Rules = append(cfg.Route.Rules, RouteRule{
+			Network:  "tcp",
+			Port:     []int{443},
+			Outbound: "ortt-warm-pool",
+		})
+	}
 	return cfg, nil
 }
 

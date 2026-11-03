@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"os"
 	"testing"
 )
 
@@ -29,7 +30,11 @@ func TestCustomAANodeCompilesAsOutbound(t *testing.T) {
 	if !found {
 		t.Fatalf("AA outbound not generated: %+v", cfg.Outbounds)
 	}
-	if len(cfg.Route.Rules) != 1 || cfg.Route.Rules[0].Outbound != "AA" {
+	expectedRules := 1
+	if os.Getenv("ORTT_ENABLED") != "false" && os.Getenv("ORTT_ENABLED") != "0" {
+		expectedRules = 2
+	}
+	if len(cfg.Route.Rules) != expectedRules || cfg.Route.Rules[0].Outbound != "AA" {
 		t.Fatalf("AA route not generated: %+v", cfg.Route.Rules)
 	}
 }

@@ -9,3 +9,4 @@ data/
 jwt.secret
 *.secret
 *.test
+smatrix*
