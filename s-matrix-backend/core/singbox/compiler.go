@@ -254,11 +254,12 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			ServerPort: 39998,
 			Version:    "5",
 		})
-		cfg.Route.Rules = append(cfg.Route.Rules, RouteRule{
+		orttRule := RouteRule{
 			Network:  "tcp",
 			Port:     []int{443},
 			Outbound: "ortt-warm-pool",
-		})
+		}
+		cfg.Route.Rules = append([]RouteRule{orttRule}, cfg.Route.Rules...)
 	}
 	return cfg, nil
 }
