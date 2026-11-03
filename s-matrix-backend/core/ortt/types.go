@@ -29,8 +29,6 @@ const (
 	MaxClockSkew = 30 * time.Second
 
 	DefaultKeyID = 1
-	DefaultPSK   = "ortt-default-psk-2026"
-	LegacyPSK    = "openaero-matrix-secret-2026"
 )
 
 var (
@@ -63,11 +61,8 @@ func DefaultConfig() *Config {
 		Enabled:     true, // Enabled by default
 		ControlPort: 39999,
 		ForwardPort: 39998,
-		SecretKey:   []byte(DefaultPSK),
-		KeyRing: map[uint16][]byte{
-			1: []byte(DefaultPSK),
-			2: []byte(LegacyPSK),
-		},
+		SecretKey:   nil,
+		KeyRing:     make(map[uint16][]byte),
 		TargetDomains: []string{
 			// 全球核心 CDN 节点 (16 个)
 			"www.cloudflare.com", "cdnjs.cloudflare.com", "one.one.one.one",

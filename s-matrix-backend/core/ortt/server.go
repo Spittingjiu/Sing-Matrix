@@ -83,10 +83,23 @@ func Start(port int) error {
 	if secret == "" {
 		secret = os.Getenv("SMATRIX_ACCEL_SECRET")
 	}
-	if secret != "" {
-		cfg.SecretKey = []byte(secret)
-		cfg.KeyRing[1] = []byte(secret)
+	if secret == "" {
+		if envData, err := os.ReadFile("/opt/sing-matrix/data/env"); err == nil {
+			for _, line := range strings.Split(string(envData), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "ORTT_SECRET=") {
+					secret = strings.TrimPrefix(line, "ORTT_SECRET=")
+					break
+				}
+			}
+		}
 	}
+	if secret == "" {
+		log.Printf("[ORTT] ⚠️ 未配置 ORTT_SECRET 鉴权密钥，ORTT 模块拒绝启动")
+		return nil
+	}
+	cfg.SecretKey = []byte(secret)
+	cfg.KeyRing[1] = []byte(secret)
 
 	globalServer = NewServer(cfg)
 	if err := globalServer.Run(); err != nil {

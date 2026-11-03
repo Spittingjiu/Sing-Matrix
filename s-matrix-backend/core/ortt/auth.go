@@ -56,9 +56,9 @@ func (c *ReplayCache) CheckAndAdd(nonce uint32, now time.Time) bool {
 
 // VerifyPacket parses, authenticates, and validates a received v2 control packet (32 bytes wire length)
 func VerifyPacket(secret []byte, raw []byte, cache *ReplayCache) (byte, uint32, uint16, error) {
-	keyRing := map[uint16][]byte{
-		1: []byte(DefaultPSK),
-		2: []byte(LegacyPSK),
+	keyRing := make(map[uint16][]byte)
+	if len(secret) > 0 {
+		keyRing[1] = secret
 	}
 	return VerifyPacketWithKeys(keyRing, secret, raw, cache)
 }
@@ -129,13 +129,7 @@ func VerifyPacketWithKeys(keyRing map[uint16][]byte, defaultSecret []byte, raw [
 		}
 	}
 
-	// 5.4 Fallback: try built-in legacy secret
-	if matchedKey == nil {
-		expectedSig := ComputeHMAC([]byte(LegacyPSK), raw[:16])
-		if hmac.Equal(expectedSig, actualSig) {
-			matchedKey = []byte(LegacyPSK)
-		}
-	}
+
 
 	if matchedKey == nil {
 		return 0, 0, 0, ErrHMACMismatch

@@ -312,7 +312,7 @@ S-Matrix 是现代化的轻量级节点管理面板，而 **ORTT (0-RTT Prewarm 
   * 当用户发起 HTTPS (TCP 443) 请求时，预热池中已就绪的 TLS/TCP 连接直接接管，实现 **0-RTT** 极速首包响应；若未命中，自动由本地 LocalForwarder 毫秒级直接回退建立连接。
 * **v2.0 32B HMAC 安全鉴权协议**：
   * **Magic**：`ORTT`（0x4F, 0x52, 0x54, 0x54），向后兼容支持 `SMTX`（0x53, 0x4D, 0x54, 0x58）。
-  * **PSK 密钥协商**：默认预共享密钥为 `ortt-default-psk-2026`，内置 KeyRing 具备自动向后兼容 fallback 密钥 `openaero-matrix-secret-2026`。
+  * **PSK 密钥协商**：预共享密钥通过环境变量 `ORTT_SECRET` 动态注入，服务端与客户端保持一致。
   * 支持重放保护（Replay Window 60s）、会话静默防扫描、基于令牌桶的 Anti-DDoS 动态限速与 45 秒未活跃自动 GC 回收。
 * **环境变量配置**：
   * `ORTT_ENABLED`：是否启用预热引擎（默认为 `true`，设为 `false` 可完全关闭）。
