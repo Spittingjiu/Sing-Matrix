@@ -167,41 +167,73 @@ func (f *LocalForwarder) handleSocks5(clientConn net.Conn) {
 
 	// 5. Full duplex transparent pipe
 	if hit {
-		f.pipeWithTransparentReplay(clientConn, upstreamConn, targetKey)
+		f.pipeWithTransparentReplay(clientConn, upstreamConn, targetKey, targetHost, targetPort)
 	} else {
 		f.pipeBidirectional(clientConn, upstreamConn)
 	}
 }
 
-func (f *LocalForwarder) pipeWithTransparentReplay(client, upstream net.Conn, targetKey string) {
+func (f *LocalForwarder) pipeWithTransparentReplay(client, upstream net.Conn, targetKey string, targetHost string, targetPort int) {
 	firstChunk := make([]byte, 16384)
+	_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
 	n, err := client.Read(firstChunk)
-	if err != nil {
+	_ = client.SetReadDeadline(time.Time{})
+	if err != nil || n == 0 {
 		return
 	}
 
-	_ = upstream.SetWriteDeadline(time.Now().Add(2 * time.Second))
-	_, err = upstream.Write(firstChunk[:n])
+	// Write ClientHello to warm upstream socket
+	_ = upstream.SetWriteDeadline(time.Now().Add(1500 * time.Millisecond))
+	_, wErr := upstream.Write(firstChunk[:n])
 	_ = upstream.SetWriteDeadline(time.Time{})
 
-	if err != nil {
+	// CRITICAL FIX: Wait up to 900ms for the first response byte (TLS ServerHello) from upstream!
+	// Because TCP Write() only buffers locally in kernel, we MUST verify the remote server actually
+	// responds and hasn't dropped/RST the pre-warmed socket due to ssl_handshake_timeout!
+	replyBuf := make([]byte, 16384)
+	var rErr error
+	var m int
+	if wErr == nil {
+		_ = upstream.SetReadDeadline(time.Now().Add(900 * time.Millisecond))
+		m, rErr = upstream.Read(replyBuf)
+		_ = upstream.SetReadDeadline(time.Time{})
+	}
+
+	if wErr != nil || rErr != nil || m == 0 {
+		// Warm socket was stale/closed by remote CDN! Transparently replay onto a fresh connection!
 		atomic.AddInt64(&GlobalStats.PoolReplays, 1)
 		_ = upstream.Close()
 
-		dialer := &net.Dialer{Timeout: 3 * time.Second}
-		newUpstream, dialErr := dialer.Dial("tcp", targetKey)
+		dialAddr := targetKey
+		if f.pool.dnsMgr != nil {
+			if ip, err := f.pool.dnsMgr.Resolve(targetHost); err == nil && ip != "" {
+				dialAddr = net.JoinHostPort(ip, strconv.Itoa(targetPort))
+			}
+		}
+		dialer := &net.Dialer{Timeout: 2500 * time.Millisecond, KeepAlive: 15 * time.Second}
+		newUpstream, dialErr := dialer.Dial("tcp", dialAddr)
+		if dialErr != nil && dialAddr != targetKey {
+			newUpstream, dialErr = dialer.Dial("tcp", targetKey)
+		}
 		if dialErr != nil {
 			return
 		}
 		defer newUpstream.Close()
+		if tc, ok := newUpstream.(*net.TCPConn); ok {
+			_ = tc.SetNoDelay(true)
+		}
 
-		if _, rErr := newUpstream.Write(firstChunk[:n]); rErr != nil {
+		if _, err := newUpstream.Write(firstChunk[:n]); err != nil {
 			return
 		}
 		f.pipeBidirectional(client, newUpstream)
 		return
 	}
 
+	// Warm socket returned valid TLS ServerHello! Forward it to client immediately and pipe full duplex.
+	if _, err := client.Write(replyBuf[:m]); err != nil {
+		return
+	}
 	f.pipeBidirectional(client, upstream)
 }
 

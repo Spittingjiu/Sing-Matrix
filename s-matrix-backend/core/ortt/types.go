@@ -89,8 +89,8 @@ func DefaultConfig() *Config {
 		},
 		MaxWarmPerDomain: 4,
 		MaxTotalSockets:  160,
-		ReplenishDelay:   30 * time.Millisecond,
-		IdleTimeout:      45 * time.Second,
+		ReplenishDelay:   8 * time.Millisecond,
+		IdleTimeout:      8 * time.Second,
 		SessionExpire:    45 * time.Second,
 	}
 }

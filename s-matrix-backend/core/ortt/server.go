@@ -311,7 +311,7 @@ func (s *Server) handleCommand(cmd byte, remoteAddr net.Addr, rawReq []byte) {
 
 	switch cmd {
 	case CmdWakeup:
-		if sess.TouchWakeup(now) {
+		if sess.TouchWakeup(now) || atomic.LoadInt64(&GlobalStats.ActiveWarmConns) < 20 {
 			log.Printf("[ORTT] ⚡ 客户端 [%s] 鉴权成功激活，异步预热核心目标连接池", clientAddr)
 			s.triggerAsyncPrewarm()
 		}
@@ -323,6 +323,9 @@ func (s *Server) handleCommand(cmd byte, remoteAddr net.Addr, rawReq []byte) {
 
 	case CmdHeartbeat:
 		sess.TouchActive(now)
+		if atomic.LoadInt64(&GlobalStats.ActiveWarmConns) < 20 {
+			s.triggerAsyncPrewarm()
+		}
 
 	case CmdSleep:
 		log.Printf("[ORTT] 💤 客户端 [%s] 正常休眠", clientAddr)
@@ -330,7 +333,7 @@ func (s *Server) handleCommand(cmd byte, remoteAddr net.Addr, rawReq []byte) {
 
 	case CmdPing:
 		sess.TouchActive(now)
-		if atomic.LoadInt64(&GlobalStats.ActiveWarmConns) == 0 {
+		if atomic.LoadInt64(&GlobalStats.ActiveWarmConns) < 20 {
 			s.triggerAsyncPrewarm()
 		}
 		if len(rawReq) >= 14 && s.udpConn != nil {
@@ -342,19 +345,36 @@ func (s *Server) handleCommand(cmd byte, remoteAddr net.Addr, rawReq []byte) {
 }
 
 func (s *Server) prewarmPool() {
-	for _, domain := range s.cfg.TargetDomains {
+	domains := s.cfg.TargetDomains
+	if len(domains) == 0 {
+		return
+	}
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for _, domain := range domains {
+		select {
+		case <-s.ctx.Done():
+			return
+		case sem <- struct{}{}:
+		}
+		wg.Add(1)
 		go func(d string) {
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
 			s.pool.Replenish(d)
 		}(domain)
 		if s.cfg.ReplenishDelay > 0 {
 			time.Sleep(s.cfg.ReplenishDelay)
 		}
 	}
+	wg.Wait()
 }
 
 func (s *Server) sessionWorker() {
 	defer s.wg.Done()
-	ticker := time.NewTicker(12 * time.Second)
+	ticker := time.NewTicker(8 * time.Second)
 	defer ticker.Stop()
 
 	for {
