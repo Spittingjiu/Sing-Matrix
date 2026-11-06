@@ -49,17 +49,17 @@ func (rl *RateLimiter) Allow(ip string) bool {
 		return false
 	}
 
-	// 2. Per-IP limit check (max 5 tokens burst, 2 rps)
+	// 2. Per-IP limit check (max 30 tokens burst, 10 rps)
 	b, exists := rl.ipLimiters[ip]
 	if !exists {
-		b = &ipBucket{tokens: 5.0, last: now}
+		b = &ipBucket{tokens: 30.0, last: now}
 		rl.ipLimiters[ip] = b
 	} else {
 		ipElapsed := now.Sub(b.last).Seconds()
 		b.last = now
-		b.tokens += ipElapsed * 2.0 // 2 tokens per sec
-		if b.tokens > 5.0 {
-			b.tokens = 5.0
+		b.tokens += ipElapsed * 10.0 // 10 tokens per sec
+		if b.tokens > 30.0 {
+			b.tokens = 30.0
 		}
 	}
 
