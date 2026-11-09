@@ -367,22 +367,70 @@ do_status() {
 read_password() {
   local p=""
   if [ -t 0 ]; then
-    read -r -s -p "请输入新密码（留空自动生成 20 位）: " p
-    echo
+    read -r -s -p "请输入新密码（留空自动生成 20 位）: " p >&2
+    printf '\n' >&2
   fi
+  p="$(printf '%s' "${p}" | tr -d '\r\n')"
   if [ -z "${p}" ]; then
     p="$(gen_secret)"
-    printf '%s\n' "已自动生成密码: ${p}"
+    p="$(printf '%s' "${p}" | tr -d '\r\n')"
+    printf '已自动生成密码: %s\n' "${p}" >&2
   fi
   printf '%s' "${p}"
 }
 
-write_cred() { # $1=user $2=pass
+update_creds() { # $1=user(optional) $2=pass(optional)
   local creds="${DATA_DIR}/panel_creds.json"
+  local new_u="$1"
+  local new_p="$2"
+  local bak="${creds}.bak-$(date +%Y%m%d%H%M%S)"
   mkdir -p "${DATA_DIR}"
-  [ -f "${creds}" ] && cp -a "${creds}" "${creds}.bak-$(date +%Y%m%d%H%M%S)"
-  printf '{\n  "username": "%s",\n  "password": "%s"\n}\n' "$1" "$2" > "${creds}"
+  [ -f "${creds}" ] && cp -a "${creds}" "${bak}"
+
+  python3 -c '
+import json, sys, os
+
+creds_path = sys.argv[1]
+new_u = sys.argv[2]
+new_p = sys.argv[3]
+
+d = {}
+if os.path.exists(creds_path) and os.path.getsize(creds_path) > 0:
+    try:
+        with open(creds_path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        d = {}
+
+if new_u:
+    d["username"] = new_u
+elif "username" not in d or not d["username"]:
+    d["username"] = "admin"
+
+if new_p:
+    d["password"] = new_p
+    # 清空原有 password_hash，由后端 loadCreds() 自动生成最新 bcrypt 哈希并清空明文
+    d["password_hash"] = ""
+
+tmp_path = creds_path + ".tmp"
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(d, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+
+os.replace(tmp_path, creds_path)
+' "${creds}" "${new_u}" "${new_p}"
+
+  if [ $? -ne 0 ] || ! python3 -m json.tool "${creds}" >/dev/null 2>&1; then
+    if [ -f "${bak}" ]; then
+      cp -a "${bak}" "${creds}"
+    fi
+    die "凭据文件更新失败，已回滚备份"
+  fi
   chmod 600 "${creds}"
+}
+
+write_cred() { # $1=user $2=pass
+  update_creds "$1" "$2"
 }
 
 # unit_belongs guards every service action: on a host with several panels, the
@@ -422,7 +470,10 @@ show_info() {
   local port user pass ip ver state cores
   port="$(port_of)"
   user="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
+  local has_hash pass_display
+  has_hash="$(grep -c '"password_hash"' "${DATA_DIR}/panel_creds.json" 2>/dev/null || echo 0)"
   pass="$(sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
+  if [ -n "${pass}" ]; then pass_display="${pass}"; elif [ "${has_hash}" -gt 0 ]; then pass_display="已设置（哈希存储，不可直接查看）"; else pass_display="未设置"; fi
   ip="$(curl -fsS -m 5 https://api.ipify.org 2>/dev/null || echo '?')"
   ver="$("${BIN}" --version 2>/dev/null | awk '{print $2}')"
   if unit_belongs && systemctl is-active --quiet "${SERVICE}" 2>/dev/null; then
@@ -436,7 +487,7 @@ show_info() {
   printf '\n%s当前状态%s\n' "${C_DIM}" "${C_OFF}"
   printf '  面板地址   http://%s:%s/\n' "${ip}" "${port}"
   printf '  用户名     %s\n' "${user:-?}"
-  printf '  密码       %s\n' "${pass:-?}"
+  printf '  密码       %s\n' "${pass_display}"
   printf '  面板版本   %s\n' "${ver:-?}"
   printf '  面板服务   %b\n' "${state}"
   printf '  sing-box   %b (%s)\n' "${cores}" "$(/usr/local/bin/sing-box version 2>/dev/null | head -1 | awk '{print $3}')"
@@ -448,26 +499,26 @@ show_info() {
 change_user() {
   local u cur
   cur="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
-  if [ -n "${NEW_USER}" ]; then u="${NEW_USER}"; else
+  [ -n "${cur}" ] || cur="admin"
+  if [ -n "${NEW_USER:-}" ]; then u="${NEW_USER:-}"; else
     read -r -p "新用户名 [${cur}]: " u
     [ -z "${u}" ] && u="${cur}"
   fi
   [ -n "${u}" ] || die "用户名不能为空"
-  local p
-  p="$(sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
-  write_cred "${u}" "${p}"
+  update_creds "${u}" ""
   ok "用户名已改为 ${u}"
   restart_panel
 }
 
 change_pass() {
   local p
-  if [ -n "${NEW_PASS}" ]; then p="${NEW_PASS}"; else p="$(read_password)"; fi
+  if [ -n "${NEW_PASS:-}" ]; then p="${NEW_PASS:-}"; else p="$(read_password)"; fi
   [ -n "${p}" ] || die "密码不能为空"
+  [ "${#p}" -ge 8 ] || die "密码长度不能少于 8 位"
   local u
   u="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
   [ -n "${u}" ] || u="admin"
-  write_cred "${u}" "${p}"
+  update_creds "${u}" "${p}"
   ok "密码已更新（用户 ${u}）"
   restart_panel
 }
@@ -487,10 +538,19 @@ change_port() {
 }
 
 show_secret() {
-  local p
+  local u pass_display has_hash p
+  u="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
+  [ -n "${u}" ] || u="admin"
+  has_hash="$(grep -c '"password_hash"' "${DATA_DIR}/panel_creds.json" 2>/dev/null || echo 0)"
   p="$(sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
-  printf '\n用户名 %s\n密码   %s\n\n' \
-    "$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)" "${p}"
+  if [ -n "${p}" ]; then
+    pass_display="${p}"
+  elif [ "${has_hash}" -gt 0 ]; then
+    pass_display="已设置（哈希存储，不可直接查看）"
+  else
+    pass_display="未设置"
+  fi
+  printf '\n用户名 %s\n密码   %s\n\n' "${u}" "${pass_display}"
 }
 
 menu() {

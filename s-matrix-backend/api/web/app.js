@@ -1,14 +1,14 @@
 const TOKEN_KEY='s_matrix_token';
 const $=(s,r=document)=>r.querySelector(s);const $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
-const state={token:localStorage.getItem(TOKEN_KEY)||'',inbounds:[],status:{},tab:'nodes',shareLinks:[],subscription:'',ws:null,statusTimer:null};
+const state={token:localStorage.getItem(TOKEN_KEY)||'',username:localStorage.getItem('sm_user')||'',inbounds:[],status:{},tab:'nodes',shareLinks:[],subscription:'',ws:null,statusTimer:null};
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function randHex(n){const b=new Uint8Array(n);crypto.getRandomValues(b);return Array.from(b,x=>x.toString(16).padStart(2,'0')).join('')}
 function uuid(){return crypto.randomUUID?crypto.randomUUID():`${randHex(4)}${randHex(2)}-${randHex(2)}-${randHex(2)}-${randHex(2)}-${randHex(6)}`}
 function password(n=28){const c='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789_-@#%';const b=new Uint8Array(n);crypto.getRandomValues(b);return Array.from(b,x=>c[x%c.length]).join('')}
-async function api(path,opt={}){const h=new Headers(opt.headers||{});h.set('Content-Type',h.get('Content-Type')||'application/json');if(state.token)h.set('Authorization',`Bearer ${state.token}`);const r=await fetch(path,{...opt,headers:h});if(r.status===401){localStorage.removeItem(TOKEN_KEY);state.token='';renderLogin();throw new Error('unauthorized')}return r}
+async function api(path,opt={}){const h=new Headers(opt.headers||{});h.set('Content-Type',h.get('Content-Type')||'application/json');if(state.token)h.set('Authorization',`Bearer ${state.token}`);const r=await fetch(path,{...opt,headers:h});if(r.status===401){localStorage.removeItem(TOKEN_KEY);localStorage.removeItem('sm_user');state.token='';state.username='';renderLogin();throw new Error('unauthorized')}return r}
 function toast(t){let e=$('.toast');if(!e){e=document.createElement('div');e.className='toast';document.body.appendChild(e)}e.textContent=t;setTimeout(()=>e.remove(),1600)}
 function setAlert(kind,msg){const box=$('#alerts');if(!box)return;box.innerHTML=msg?`<div class="alert ${kind}">${esc(msg)}</div>`:''}
-async function login(ev){ev.preventDefault();const u=$('#username').value,p=$('#password').value;try{const r=await fetch('/api/v1/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});const text=await r.text();if(!r.ok){let msg=text;try{const j=JSON.parse(text);msg=j.error||text}catch{}throw new Error(msg)}const d=JSON.parse(text);state.token=d.token;localStorage.setItem(TOKEN_KEY,d.token);await renderApp()}catch(e){$('#loginError').textContent=e.message||String(e);$('#loginError').classList.remove('hidden')}}
+async function login(ev){ev.preventDefault();const u=$('#username').value,p=$('#password').value;try{const r=await fetch('/api/v1/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});const text=await r.text();if(!r.ok){let msg=text;try{const j=JSON.parse(text);msg=j.error||text}catch{}throw new Error(msg)}const d=JSON.parse(text);state.token=d.token;state.username=d.username||u;localStorage.setItem(TOKEN_KEY,d.token);localStorage.setItem('sm_user',state.username);await renderApp()}catch(e){$('#loginError').textContent=e.message||String(e);$('#loginError').classList.remove('hidden')}}
 function renderLogin(){
   if(state.statusTimer){clearInterval(state.statusTimer);state.statusTimer=null}
   if(state.ws){state.ws.close();state.ws=null}
@@ -27,7 +27,7 @@ function nav(t){
   state.tab=t;
   $$('.tab').forEach(x=>x.classList.toggle('hidden',x.dataset.tab!==t));
   $$('[data-nav]').forEach(x=>x.classList.toggle('active',x.dataset.nav===t));
-  if(t==='terminal')openTerminal();
+  if(!state.username&&state.token){try{const _p=JSON.parse(atob(state.token.split('.')[1]));if(_p.sub)state.username=_p.sub}catch{}} if(t==='terminal')openTerminal();
   if(t==='subs'){loadSubscription()};if(t==='settings'){loadSingboxVersion();loadAcmeStatus()}
 }
 function typeLabel(t){return({vless:'REALITY',hysteria2:'HY2',hysteria:'Hysteria',vmess:'VMess',trojan:'Trojan',shadowsocks:'SS',socks:'SOCKS',http:'HTTP',tuic:'TUIC',naive:'Naive',shadowtls:'ShadowTLS',anytls:'AnyTLS'}[t]||String(t).toUpperCase())}
@@ -313,7 +313,7 @@ function showShare(mode){
   if($('#copySub'))$('#copySub').onclick=()=>navigator.clipboard.writeText(state.subscription).then(()=>toast('已复制'));
   $$('[data-copylink]').forEach(b=>b.onclick=()=>navigator.clipboard.writeText(b.dataset.copylink).then(()=>toast('已复制')));
 }
-async function changePassword(){try{const r=await api('/api/v1/system/change-password',{method:'POST',body:JSON.stringify({username:val('setUser'),old_password:val('oldPass'),new_password:val('newPass')})});if(!r.ok)throw new Error((await r.json()).error||'修改失败');$('#oldPass').value='';$('#newPass').value='';setAlert('success','密码已更新')}catch(e){setAlert('error',String(e))}}
+async function changePassword(){try{const r=await api('/api/v1/system/change-password',{method:'POST',body:JSON.stringify({username:val('setUser'),old_password:val('oldPass'),new_password:val('newPass')})});if(!r.ok)throw new Error((await r.json()).error||'修改失败');if(val('setUser')){state.username=val('setUser');localStorage.setItem('sm_user',state.username)} $('#oldPass').value='';$('#newPass').value='';setAlert('success','密码已更新')}catch(e){setAlert('error',String(e))}}
 async function loadSingboxVersion(){const out=$('#singboxVersionOut');try{if(out)out.textContent='正在检测 sing-box 版本…';const r=await api('/api/v1/system/singbox/version');const d=await r.json();if(!r.ok)throw new Error(d.error||'检测失败');const set=(id,v)=>{const el=$('#'+id);if(el)el.textContent=v||'--'};set('sbCur',d.current);set('sbStable',d.stable);set('sbAlpha',d.alpha);const sel=$('#sbVersionSelect');if(sel){sel.innerHTML=(d.versions||[]).map(x=>`<option value="${esc(x.tag)}">${esc(x.tag)}${x.prerelease?' · alpha':' · stable'}</option>`).join('');if(d.stable)sel.value=d.stable}if(out)out.textContent='已检测到 '+(d.versions||[]).length+' 个版本'}catch(e){if(out)out.textContent=String(e);setAlert('error',String(e))}}
 async function switchSingboxVersion(channel){const out=$('#singboxVersionOut');try{const version=channel==='selected'?($('#sbVersionSelect')?.value||''):'';if(out)out.textContent='正在切换 sing-box '+(version||channel)+'，请稍等…';const r=await api('/api/v1/system/singbox/switch',{method:'POST',body:JSON.stringify({channel,version})});const d=await r.json();if(!r.ok)throw new Error(d.error||'切换失败');if(out)out.textContent='已切换到 '+(d.current||d.version);await loadStatus();await loadSingboxVersion();setAlert('success','sing-box 已切换到 '+(d.current||d.version))}catch(e){if(out)out.textContent=String(e);setAlert('error',String(e))}}
 function openTerminal(){if(state.ws)return;const proto=location.protocol==='https:'?'wss:':'ws:';state.ws=new WebSocket(`${proto}//${location.host}/api/v1/logs/ws?token=${encodeURIComponent(state.token)}`);state.ws.onmessage=ev=>{const b=$('#terminalBox');if(!b)return;const line=String(ev.data).trimEnd();const c=/ERROR|FATAL|panic/i.test(line)?'log-error':/WARN|WARNING/i.test(line)?'log-warn':/INFO/i.test(line)?'log-info':'';const n=b.children.length+1;b.insertAdjacentHTML('beforeend',`<div class="${c}"><span style="color:#475569;margin-right:8px">${String(n).padStart(4,'0')}</span>${esc(line)}</div>`);while(b.children.length>600)b.firstChild.remove();b.scrollTop=b.scrollHeight};state.ws.onerror=()=>{$('#terminalBox')?.insertAdjacentHTML('beforeend','<div class="log-error">ERROR websocket telemetry disconnected</div>')}}
@@ -399,7 +399,7 @@ async function renderApp(){
         <div class="card-head"><h2>面板账号</h2></div>
         <div class="card-body">
           <div class="grid2">
-            <div class="field"><label>用户名</label><input id="setUser" class="input" value="admin"></div>
+            <div class="field"><label>用户名</label><input id="setUser" class="input" value="${esc(state.username||localStorage.getItem('sm_user')||'admin')}"></div>
             <div class="field"><label>旧密码</label><input id="oldPass" class="input" type="password" placeholder="原密码（必填）"></div>
             <div class="field"><label>新密码</label><input id="newPass" class="input" type="password" placeholder="至少 8 位"></div>
           </div>
@@ -451,7 +451,7 @@ async function renderApp(){
   <div id="modalRoot"></div></main>`;
 
   $$('[data-nav]').forEach(b=>b.onclick=()=>nav(b.dataset.nav));
-  $('#logout').onclick=()=>{localStorage.removeItem(TOKEN_KEY);state.token='';renderLogin()};
+  $('#logout').onclick=()=>{localStorage.removeItem(TOKEN_KEY);localStorage.removeItem('sm_user');state.token='';state.username='';renderLogin()};
   $('#refreshNodes').onclick=async()=>{await loadStatus();await loadInbounds();startStatusPolling()};
   $('#refreshStatus').onclick=loadStatus;
   $('#search').oninput=renderNodes;
