@@ -399,8 +399,9 @@ if os.path.exists(creds_path) and os.path.getsize(creds_path) > 0:
     try:
         with open(creds_path, "r", encoding="utf-8") as f:
             d = json.load(f)
-    except Exception:
-        d = {}
+    except Exception as e:
+        print(f"凭据文件损坏，无法解析，已停止写入，凭据保持原样: {e}", file=sys.stderr)
+        sys.exit(2)
 
 if new_u:
     d["username"] = new_u
@@ -471,7 +472,8 @@ show_info() {
   port="$(port_of)"
   user="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
   local has_hash pass_display
-  has_hash="$(grep -c '"password_hash"' "${DATA_DIR}/panel_creds.json" 2>/dev/null || echo 0)"
+  has_hash="$(grep -c '"password_hash"' "${DATA_DIR}/panel_creds.json" 2>/dev/null || true)"
+  has_hash="${has_hash:-0}"
   pass="$(sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
   if [ -n "${pass}" ]; then pass_display="${pass}"; elif [ "${has_hash}" -gt 0 ]; then pass_display="已设置（哈希存储，不可直接查看）"; else pass_display="未设置"; fi
   ip="$(curl -fsS -m 5 https://api.ipify.org 2>/dev/null || echo '?')"
@@ -541,7 +543,8 @@ show_secret() {
   local u pass_display has_hash p
   u="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
   [ -n "${u}" ] || u="admin"
-  has_hash="$(grep -c '"password_hash"' "${DATA_DIR}/panel_creds.json" 2>/dev/null || echo 0)"
+  has_hash="$(grep -c '"password_hash"' "${DATA_DIR}/panel_creds.json" 2>/dev/null || true)"
+  has_hash="${has_hash:-0}"
   p="$(sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${DATA_DIR}/panel_creds.json" 2>/dev/null)"
   if [ -n "${p}" ]; then
     pass_display="${p}"
