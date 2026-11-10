@@ -42,11 +42,25 @@ func IsPortAvailable(port int) bool {
 }
 
 func PickAvailablePort(preferred int, used map[int]bool) int {
+	return PickAvailablePortOwned(preferred, used, nil)
+}
+
+// PickAvailablePortOwned is PickAvailablePort for a full desired-state
+// compile (rebuildFromDB / /singbox/compile). Ports in "owned" are the
+// ports this compile itself wants: the running sing-box still holds them
+// while the new config is being built, so the bind test would wrongly
+// reject them and silently remap every existing node to a random port
+// (the DB keeps the old port, so the share links break). Owned ports are
+// therefore trusted without a bind test, and the random scan never steals
+// a port owned by another node in the same compile. Callers creating a
+// single new node must pass owned=nil (PickAvailablePort) so a port held
+// by the running core is still rejected.
+func PickAvailablePortOwned(preferred int, used, owned map[int]bool) int {
 	portMutex.Lock()
 	defer portMutex.Unlock()
 
 	// Trust preferred port only if strictly valid and unreserved
-	if preferred > 0 && !ReservedPorts[preferred] && !used[preferred] && IsPortAvailable(preferred) {
+	if preferred > 0 && !ReservedPorts[preferred] && !used[preferred] && (owned[preferred] || IsPortAvailable(preferred)) {
 		used[preferred] = true
 		return preferred
 	}
@@ -55,7 +69,7 @@ func PickAvailablePort(preferred int, used map[int]bool) int {
 	start := 10000 + rand.Intn(50001)
 	for offset := 0; offset <= 50000; offset++ {
 		port := 10000 + (start-10000+offset)%50001
-		if used[port] || ReservedPorts[port] {
+		if used[port] || ReservedPorts[port] || owned[port] {
 			continue
 		}
 		if IsPortAvailable(port) {

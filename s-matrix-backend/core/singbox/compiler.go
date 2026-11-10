@@ -74,6 +74,15 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 	byID := map[string]UINode{}
 	inboundTags := map[string]string{}
 	usedPorts := map[int]bool{}
+	// Ports this compile itself wants. The running sing-box still holds
+	// them while the new config is built; without this set, the bind test
+	// in PickAvailablePort would remap every existing node on each rebuild.
+	ownedPorts := map[int]bool{}
+	for _, node := range uiData.Nodes {
+		if p := num(node.Data, "port", 0); p > 0 {
+			ownedPorts[p] = true
+		}
+	}
 	for _, node := range uiData.Nodes {
 		if node.ID == "" {
 			return cfg, fmt.Errorf("node id is required")
@@ -87,7 +96,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if err != nil {
 				return cfg, err
 			}
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
@@ -96,7 +105,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			inboundTags[node.ID] = in.Tag
 		case "inbound-reality":
 			dest := str(node.Data, "dest", str(node.Data, "server_name", "www.cloudflare.com"))
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
@@ -109,7 +118,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if err != nil {
 				return cfg, err
 			}
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
@@ -121,7 +130,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if err != nil {
 				return cfg, err
 			}
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
@@ -133,7 +142,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if err != nil {
 				return cfg, err
 			}
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
@@ -141,7 +150,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-shadowtls":
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
@@ -153,7 +162,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			if err != nil {
 				return cfg, err
 			}
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
@@ -161,18 +170,36 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-vmess":
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
+			// "security" in node.Data is the TLS flag ("tls"); the VMess
+			// cipher lives in "vmess_security" and is a link-only field,
+			// never written into the server config (sing-box rejects an
+			// unknown "security" field in vmess inbound users).
+			tlsFlag := str(node.Data, "security", "") == "tls" || boolVal(node.Data, "tls", false)
+			certPath, keyPath := "", ""
+			if tlsFlag {
+				var err error
+				certPath, keyPath, err = requireTLSCert(node.Data, "vmess")
+				if err != nil {
+					return cfg, err
+				}
+			} else {
+				certPath = str(node.Data, "certificate_path", str(node.Data, "cert_path", ""))
+				keyPath = str(node.Data, "key_path", "")
+			}
 			in := NewVMessInbound(tagOf(node), port, safeUUID(str(node.Data, "uuid", "")),
 				str(node.Data, "network", "tcp"), str(node.Data, "path", "/"), str(node.Data, "host", ""),
-				str(node.Data, "security", "") == "tls", str(node.Data, "sni", str(node.Data, "server_name", "")))
+				tlsFlag, str(node.Data, "sni", str(node.Data, "server_name", "")),
+				certPath, keyPath,
+				str(node.Data, "service_name", str(node.Data, "serviceName", str(node.Data, "grpc_service_name", ""))))
 			in = withFinalMaskTransport(in, finalMaskOf(node.Data))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-trojan":
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
@@ -180,7 +207,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-ss", "inbound-shadowsocks":
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
@@ -188,7 +215,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-socks":
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
@@ -196,7 +223,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-http":
-			port := PickAvailablePort(num(node.Data, "port", 0), usedPorts)
+			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}

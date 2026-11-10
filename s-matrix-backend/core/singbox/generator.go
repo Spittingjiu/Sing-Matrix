@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"strings"
 )
 
 type Config struct {
@@ -139,7 +140,18 @@ func NewHysteria2Inbound(tag string, port int, password string, masquerade strin
 	return in
 }
 
-func NewVMessInbound(tag string, port int, uuid string, network string, path string, host string, tls bool, serverName string) Inbound {
+// NewVMessInbound builds a VMess inbound. Unlike the old version, tls and
+// serverName are no longer discarded: when tls is true the caller must supply
+// certificate/key paths (the compiler enforces this via requireTLSCert), and
+// the TLS block is only emitted when both paths are present, so sing-box
+// never receives a bare TLS inbound it would reject with "missing certificate".
+// Note: there is deliberately no cipher parameter. sing-box 1.13 rejects an
+// unknown "security" field in vmess inbound users, and the server accepts
+// whatever cipher the client negotiates; the cipher (vmess_security) is a
+// client-side link field only, carried in the DB payload and the vmess://
+// "scy" field, never in the server config.
+// serviceName is used as the gRPC service name (transport "service_name").
+func NewVMessInbound(tag string, port int, uuid string, network string, path string, host string, tls bool, serverName string, certPath string, keyPath string, serviceName string) Inbound {
 	in := Inbound{
 		Type:       "vmess",
 		Tag:        tag,
@@ -149,19 +161,29 @@ func NewVMessInbound(tag string, port int, uuid string, network string, path str
 	}
 	if network != "" && network != "tcp" {
 		t := map[string]interface{}{"type": network}
-		if path != "" && path != "/" {
-			t["path"] = path
-		}
-		if host != "" {
-			t["headers"] = map[string]interface{}{"Host": host}
+		if network == "grpc" {
+			if serviceName != "" {
+				t["service_name"] = serviceName
+			} else if path != "" && path != "/" {
+				t["service_name"] = strings.TrimPrefix(path, "/")
+			}
+		} else {
+			if path != "" && path != "/" {
+				t["path"] = path
+			}
+			if host != "" {
+				t["headers"] = map[string]interface{}{"Host": host}
+			}
 		}
 		in.Transport = t
 	}
-	// Do not emit inbound TLS here unless certificate/key fields are supported.
-	// sing-box rejects bare TLS inbounds with "missing certificate". TLS-capable
-	// protocols should either use REALITY or explicit certificate paths.
-	_ = tls
-	_ = serverName
+	if tls && certPath != "" && keyPath != "" {
+		tlsCfg := map[string]interface{}{"enabled": true, "certificate_path": certPath, "key_path": keyPath}
+		if serverName != "" {
+			tlsCfg["server_name"] = serverName
+		}
+		in.TLS = tlsCfg
+	}
 	return in
 }
 

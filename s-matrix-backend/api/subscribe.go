@@ -305,10 +305,12 @@ func buildHY2Link(in map[string]interface{}, host string, port int, tag string) 
 
 func buildVMessLink(in map[string]interface{}, host string, port int, tag string) string {
 	uuid := firstUserValue(in, "uuid", "00000000-0000-0000-0000-000000000000")
+	security := firstUserValue(in, "security", "auto")
 	transport, _ := in["transport"].(map[string]interface{})
 	tls, _ := in["tls"].(map[string]interface{})
 	netType := strMap(transport, "type", "tcp")
 	path := strMap(transport, "path", "")
+	serviceName := strMap(transport, "service_name", "")
 	headers, _ := transport["headers"].(map[string]interface{})
 	rHost := strMap(headers, "Host", "")
 	tlsEnabled := false
@@ -321,14 +323,21 @@ func buildVMessLink(in map[string]interface{}, host string, port int, tag string
 	}
 	vmessCfg := map[string]interface{}{
 		"v": "2", "ps": tag, "add": host, "port": port, "id": uuid, "aid": 0,
-		"net": netType, "type": "none", "tls": "none",
+		"net": netType, "type": "none", "tls": "none", "scy": security,
 	}
-	if netType == "ws" {
+	if netType == "ws" || netType == "httpupgrade" {
 		if path != "" {
 			vmessCfg["path"] = path
 		}
 		if rHost != "" {
 			vmessCfg["host"] = rHost
+		}
+	}
+	if netType == "grpc" {
+		if serviceName != "" {
+			vmessCfg["path"] = serviceName
+		} else if path != "" {
+			vmessCfg["path"] = path
 		}
 	}
 	if tlsEnabled {
@@ -621,20 +630,31 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 		path := strMap(payload, "path", "")
 		rHost := strMap(payload, "host", "")
 		security := strMap(payload, "security", "")
+		// "security" in the payload is the TLS flag ("tls"); the VMess
+		// cipher lives in "vmess_security" and maps to "scy".
+		cipher := strMap(payload, "vmess_security", "auto")
+		serviceName := strMap(payload, "service_name", "")
 		sni := strMap(payload, "server_name", "")
 		if sni == "" {
 			sni = strMap(payload, "sni", "")
 		}
 		vmessCfg := map[string]interface{}{
 			"v": "2", "ps": tag, "add": host, "port": port, "id": uuid, "aid": 0,
-			"net": netType, "type": "none", "tls": "none",
+			"net": netType, "type": "none", "tls": "none", "scy": cipher,
 		}
-		if netType == "ws" {
+		if netType == "ws" || netType == "httpupgrade" {
 			if path != "" {
 				vmessCfg["path"] = path
 			}
 			if rHost != "" {
 				vmessCfg["host"] = rHost
+			}
+		}
+		if netType == "grpc" {
+			if serviceName != "" {
+				vmessCfg["path"] = serviceName
+			} else if path != "" {
+				vmessCfg["path"] = path
 			}
 		}
 		if security == "tls" {

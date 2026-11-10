@@ -102,7 +102,7 @@ cd s-matrix-backend && go build -o /usr/local/bin/smatrix ./cmd/server
 
 早期版本有个真实事故：一键 Hysteria2 生成的节点没带证书，`sing-box` 直接报 `TLS required` 拒绝启动 —— 结果新建一个坏节点，把整台上所有正常节点一起带下线。现在：
 
-- Hysteria2 / AnyTLS / TUIC / Naive 一律强制带证书，缺证书在生成阶段就报错
+- Hysteria2 / AnyTLS / TUIC / Naive / VMess+TLS 一律强制带证书，缺证书在生成阶段就报错
 - 写配置前先 `check`，失败则保留旧配置与运行中的进程
 - 启动时若发现磁盘上的配置被新版本 core 拒绝，会自动按数据库重建并修复
 
@@ -115,6 +115,7 @@ cd s-matrix-backend && go build -o /usr/local/bin/smatrix ./cmd/server
 | **AnyTLS · 域名证书** | 校验域名 → 签发 Let's Encrypt → 建 AnyTLS 节点（链接不带 `insecure`） |
 | **AnyTLS · 自签证书** | 自动生成 ECDSA 自签证书 → 建节点（链接带 `insecure=1`） |
 | **REALITY** | 自动生成密钥对 / shortId，伪装 `www.microsoft.com` |
+| **VMess · WS+TLS** | 默认 VMess + WS + TLS：填域名走 ACME 证书，否则自动生成自签证书；可选 tcp / grpc / httpupgrade |
 | **Hysteria2** | 自动生成密码，带 masquerade 伪装 |
 | **自定义参数** | 12 种协议全参数表单（VLESS / VMess / Trojan / SS / TUIC / Naive / ShadowTLS / AnyTLS / HY2 / Hysteria / SOCKS / HTTP） |
 
@@ -251,6 +252,7 @@ POST /api/v1/quick/anytls           # 一键 AnyTLS（自签）
 POST /api/v1/quick/anytls-domain    # 一键 AnyTLS（域名证书）
 POST /api/v1/quick/reality          # 一键 REALITY
 POST /api/v1/quick/hy2              # 一键 Hysteria2
+POST /api/v1/quick/vmess           # 一键 VMess（默认 WS+TLS，可选域名走 ACME）
 GET  /api/v1/domain/check?domain=   # 校验域名是否指向本机
 POST /api/v1/domain/issue           # 签发证书
 GET  /api/v1/domain/status          # ACME 状态（本机 IP / 校验方式）

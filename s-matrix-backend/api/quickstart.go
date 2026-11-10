@@ -117,6 +117,128 @@ func QuickHY2Handler(dep quickDeps) gin.HandlerFunc {
 	}
 }
 
+// QuickVMessHandler creates a VMess inbound. Default one-click form is
+// VMess + WS + TLS: with a domain it uses an ACME certificate for that
+// domain, otherwise a panel-managed self-signed certificate (clients
+// connect with skip-cert-verify, like the AnyTLS/HY2 one-click flows).
+// Network can be overridden to tcp/grpc/httpupgrade; without a certificate
+// no TLS config is emitted, so the handler fails loudly instead of writing
+// a config sing-box would refuse.
+func QuickVMessHandler(dep quickDeps) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Remark   string `json:"remark"`
+			Port     int    `json:"port"`
+			Domain   string `json:"domain"`
+			SNI      string `json:"sni"`
+			Network  string `json:"network"`
+			Path     string `json:"path"`
+			Host     string `json:"host"`
+			Security string `json:"security"`
+			TLS      *bool  `json:"tls"`
+		}
+		_ = c.ShouldBindJSON(&req)
+		remark := strings.TrimSpace(req.Remark)
+		network := strings.ToLower(strings.TrimSpace(req.Network))
+		switch network {
+		case "", "ws":
+			network = "ws"
+		case "tcp", "grpc", "httpupgrade":
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "network 只能是 ws / tcp / grpc / httpupgrade"})
+			return
+		}
+		path := strings.TrimSpace(req.Path)
+		if path == "" {
+			path = "/"
+		}
+		security := strings.TrimSpace(req.Security)
+		switch security {
+		case "", "auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero":
+			if security == "" {
+				security = "auto"
+			}
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "security 只能是 auto / aes-128-gcm / chacha20-poly1305 / none / zero"})
+			return
+		}
+		useTLS := true
+		if req.TLS != nil {
+			useTLS = *req.TLS
+		}
+		domain := strings.ToLower(strings.TrimSpace(req.Domain))
+		sni := strings.TrimSpace(req.SNI)
+		if domain != "" && sni == "" {
+			sni = domain
+		}
+
+		port := singbox.PickAvailablePort(req.Port, map[int]bool{})
+		if port == 0 {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no available port"})
+			return
+		}
+		if remark == "" {
+			remark = fmt.Sprintf("VMess :%d", port)
+		}
+
+		var certPath, keyPath string
+		host := strings.TrimSpace(req.Host)
+		if useTLS {
+			if domain != "" {
+				if dep.ACME == nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "ACME 未初始化，无法为域名申请证书"})
+					return
+				}
+				cert, err := dep.ACME.Obtain(domain)
+				if err != nil {
+					c.JSON(http.StatusBadGateway, gin.H{"error": "证书申请失败: " + err.Error()})
+					return
+				}
+				certPath, keyPath = cert.CertPath, cert.KeyPath
+				host = domain
+			} else {
+				if sni == "" {
+					sni = "www.bing.com"
+				}
+				if host == "" {
+					host = sni
+				}
+				certName := fmt.Sprintf("vmess-%d", port)
+				var err error
+				certPath, keyPath, _, err = singbox.EnsureSelfSignedPair(resolveCertDir(dep.CertDir), certName, sni, singbox.LocalIPs(), []string{sni})
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "生成自签证书失败: " + err.Error()})
+					return
+				}
+			}
+		} else {
+			if host == "" {
+				host = sni
+			}
+		}
+
+		data := map[string]interface{}{
+			"tag":            remark,
+			"port":           port,
+			"uuid":           randomUUIDLike(),
+			"network":        network,
+			"path":           path,
+			"host":           host,
+			"vmess_security": security,
+			"service_name":   strings.TrimPrefix(path, "/"),
+		}
+		if useTLS {
+			data["security"] = "tls"
+			data["server_name"] = sni
+			data["sni"] = sni
+			data["certificate_path"] = certPath
+			data["key_path"] = keyPath
+		}
+		topo := singleInboundTopology("vmess-oneclick", "inbound-vmess", port, remark, data)
+		respondQuick(c, dep, topo, "vmess", port)
+	}
+}
+
 // QuickAnyTLSHandler creates an AnyTLS inbound with a panel-managed self-signed
 // certificate. AnyTLS requires TLS, and self-signed keeps it usable without a
 // domain or ACME flow; clients connect with skip-cert-verify.
@@ -182,7 +304,7 @@ func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string
 			}
 			pTag, _ := n.Data["tag"].(string)
 			payload := map[string]interface{}{}
-			for _, k := range []string{"private_key", "public_key", "short_id", "uuid", "password", "dest", "server_name", "sni", "certificate_path", "key_path", "masquerade", "padding_scheme"} {
+			for _, k := range []string{"private_key", "public_key", "short_id", "uuid", "password", "dest", "server_name", "sni", "certificate_path", "key_path", "masquerade", "padding_scheme", "network", "path", "host", "vmess_security", "security", "service_name", "tls"} {
 				if v, ok := n.Data[k]; ok {
 					payload[k] = v
 				}
@@ -230,6 +352,8 @@ func quickDBType(kind string) string {
 		return "hysteria2"
 	case "inbound-anytls":
 		return "anytls"
+	case "inbound-vmess":
+		return "vmess"
 	}
 	return ""
 }

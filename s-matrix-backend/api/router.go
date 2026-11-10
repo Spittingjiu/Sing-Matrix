@@ -52,6 +52,7 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	secured.POST("/quick/reality", QuickRealityHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB}))
 	secured.POST("/quick/hy2", QuickHY2Handler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB}))
 	secured.POST("/quick/anytls", QuickAnyTLSHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB, CertDir: dep.CertDir}))
+	secured.POST("/quick/vmess", QuickVMessHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB, CertDir: dep.CertDir, DataDir: dep.DataDir, ACME: dep.ACME, PanelAddr: dep.PanelAddr}))
 	secured.GET("/certs", ListCertsHandler(dep.CertDir))
 	secured.POST("/certs/selfsigned", SelfSignedCertHandler(dep.CertDir))
 	secured.POST("/panel/connect-sub", ConnectSubHandler())
@@ -107,6 +108,20 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 			for _, ib := range cfg.Inbounds {
 				dep.DB.Where("tag = ?", ib.Tag).Delete(&models.Inbound{})
 				payload := map[string]interface{}{}
+				// vmess_security is a link-only field: the compiled server
+				// config must not carry it (sing-box rejects an unknown
+				// "security" field in vmess users), so copy it from the
+				// submitted UI node data instead.
+				if ib.Type == "vmess" {
+					for _, n := range ui.Nodes {
+						if tag, _ := n.Data["tag"].(string); tag == ib.Tag {
+							if v, ok := n.Data["vmess_security"].(string); ok && v != "" {
+								payload["vmess_security"] = v
+							}
+							break
+						}
+					}
+				}
 				if ib.TLS != nil {
 					if sn, ok := ib.TLS["server_name"].(string); ok {
 						payload["server_name"] = sn
@@ -137,6 +152,9 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 					}
 					if p, ok := ib.Transport["path"].(string); ok {
 						payload["path"] = p
+					}
+					if s, ok := ib.Transport["service_name"].(string); ok {
+						payload["service_name"] = s
 					}
 					if h, ok := ib.Transport["headers"].(map[string]interface{}); ok {
 						if host, ok := h["Host"].(string); ok {
