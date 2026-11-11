@@ -243,7 +243,7 @@ wait_health() {
 
 firewall_hint() {
   command -v ufw >/dev/null 2>&1 || return 0
-  ufw status 2>/dev/null | grep -q "Status: active" || return 0
+  case "$(ufw status 2>/dev/null || true)" in *"Status: active"*) ;; *) return 0 ;; esac
   warn "ufw 已启用，如需外网访问请放行: ufw allow ${PORT}/tcp"
 }
 
@@ -282,6 +282,10 @@ EOF
   say ""
 }
 
+
+service_exists() {
+  command -v systemctl >/dev/null 2>&1 && systemctl cat "${SERVICE}.service" >/dev/null 2>&1
+}
 
 # ---------- sm helper command ----------
 
@@ -350,11 +354,13 @@ do_upgrade() {
   backup="${BIN}.bak-$(date +%Y%m%d%H%M%S)"
   cp -a "${BIN}" "${backup}"
   install_binary
-  if [ "${WITH_SERVICE}" = "1" ] && systemctl list-unit-files | grep -q "^${SERVICE}.service"; then
+  if [ "${WITH_SERVICE}" = "1" ] && unit_belongs; then
     systemctl restart "${SERVICE}"
     sleep 2
     systemctl is-active --quiet "${SERVICE}" || die "升级后服务未启动，旧版已备份在 ${BIN}.bak-*"
     ok "已升级并重启（旧版备份 ${backup}）"
+  elif [ "${WITH_SERVICE}" = "1" ] && service_exists; then
+    warn "本机存在另一个 ${SERVICE} 服务（不属于 ${INSTALL_DIR}），已跳过重启"
   else
     ok "二进制已更新"
   fi
@@ -376,7 +382,7 @@ do_uninstall() {
 }
 
 do_status() {
-  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE}.service"; then
+  if service_exists; then
     systemctl status "${SERVICE}" --no-pager -l | head -20
   else
     warn "未发现 ${SERVICE} 服务"
@@ -471,7 +477,7 @@ restart_panel() {
     systemctl restart "${SERVICE}"
     sleep 2
     if systemctl is-active --quiet "${SERVICE}"; then ok "面板已重启"; else die "面板重启失败，请查看 journalctl -u ${SERVICE} -n 50"; fi
-  elif systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE}.service"; then
+  elif service_exists; then
     warn "本机存在另一个 ${SERVICE} 服务（不属于 ${INSTALL_DIR}），已跳过重启"
   else
     warn "未找到 ${SERVICE} 服务，改动会在下次启动时生效"
