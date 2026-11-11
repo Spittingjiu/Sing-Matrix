@@ -102,11 +102,38 @@ func accelExplicitlyDisabled() bool {
 	return v == "false" || v == "0"
 }
 
+// forwardPort returns the loopback port the ORTT forwarder listens on.
+// ORTT_FORWARD_PORT overrides it (used by tests); otherwise the engine's
+// default forward port applies.
+func forwardPort() int {
+	if s := strings.TrimSpace(os.Getenv("ORTT_FORWARD_PORT")); s != "" {
+		if p, err := strconv.Atoi(s); err == nil && p > 0 && p <= 65535 {
+			return p
+		}
+	}
+	return DefaultConfig().ForwardPort
+}
+
+// ForwarderListening reports whether the ORTT warm-pool forwarder is
+// accepting connections on the loopback forward port. A plain TCP dial
+// with a short timeout is enough: it proves something is listening, and
+// a refused connection fails fast on loopback.
+func ForwarderListening() bool {
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(forwardPort()))
+	conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 // EffectiveEnabled reports whether routing traffic through the ORTT warm
 // pool is safe: ORTT must be explicitly enabled (default off), the legacy
-// flag must not disable it, and a secret must be configured. Without a
-// secret the engine cannot start, so routing to the forwarder would send
-// all TCP 443 traffic to a dead listener.
+// flag must not disable it, a secret must be configured, and the forwarder
+// must actually be listening. A secret alone is not enough: if the engine
+// failed to start, routing to the forwarder would send all TCP 443
+// traffic to a dead listener.
 func EffectiveEnabled() bool {
 	if accelExplicitlyDisabled() {
 		return false
@@ -118,7 +145,10 @@ func EffectiveEnabled() bool {
 	if enabled == "" || enabled == "false" || enabled == "0" {
 		return false
 	}
-	return SecretConfigured()
+	if !SecretConfigured() {
+		return false
+	}
+	return ForwarderListening()
 }
 
 // Start launches the ORTT server if explicitly enabled (default disabled)

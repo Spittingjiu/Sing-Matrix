@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -11,6 +13,27 @@ import (
 	"s-matrix/core/singbox"
 	"s-matrix/models"
 )
+
+func startTestListener(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	return strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+}
+
+func closedTestPort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	return strconv.Itoa(port)
+}
 
 // TestRebuildFromDBKeepsEveryEnabledInbound guards the regression where a
 // one-click create compiled a single-inbound config and silently dropped the
@@ -118,11 +141,13 @@ func TestRebuildFromDBEmptyOrttRoute(t *testing.T) {
 		name      string
 		ortt      string
 		secret    string
+		listen    bool
 		wantRoute bool
 	}{
-		{"enabled with secret", "true", "test-secret-32", true},
-		{"enabled without secret", "true", "", false},
-		{"disabled", "false", "test-secret-32", false},
+		{"enabled with secret", "true", "test-secret-32", true, true},
+		{"enabled without secret", "true", "", true, false},
+		{"disabled", "false", "test-secret-32", true, false},
+		{"engine down with secret", "true", "test-secret-32", false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -131,6 +156,11 @@ func TestRebuildFromDBEmptyOrttRoute(t *testing.T) {
 			t.Setenv("SMATRIX_ACCEL_ENABLED", "")
 			t.Setenv("ORTT_SECRET", tc.secret)
 			t.Setenv("SMATRIX_ACCEL_SECRET", "")
+			if tc.listen {
+				t.Setenv("ORTT_FORWARD_PORT", startTestListener(t))
+			} else {
+				t.Setenv("ORTT_FORWARD_PORT", closedTestPort(t))
+			}
 			if err := rebuildFromDB(db, manager, configPath); err != nil {
 				t.Fatalf("rebuild: %v", err)
 			}

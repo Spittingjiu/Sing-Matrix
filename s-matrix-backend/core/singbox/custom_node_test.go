@@ -21,6 +21,7 @@ func TestCustomAANodeCompilesAsOutbound(t *testing.T) {
 	t.Setenv("ORTT_ENABLED", "true")
 	t.Setenv("ORTT_SECRET", "test-secret-32-bytes-for-unit-test")
 	t.Setenv("SMATRIX_DATA_DIR", t.TempDir())
+	t.Setenv("ORTT_FORWARD_PORT", startTestListener(t))
 	cfg, err := CompileToSingbox(ui)
 	if err != nil {
 		t.Fatal(err)

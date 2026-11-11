@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -52,6 +53,21 @@ func TestLoadSecret(t *testing.T) {
 	}
 }
 
+func startTestListener(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	return strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+}
+
+func closedTestPort(t *testing.T) string {
+	t.Helper()
+	return strconv.Itoa(freePort(t))
+}
+
 func TestEffectiveEnabled(t *testing.T) {
 	dir := t.TempDir()
 	cases := []struct {
@@ -59,16 +75,19 @@ func TestEffectiveEnabled(t *testing.T) {
 		ortt   string
 		accel  string
 		secret string
+		listen bool
 		want   bool
 	}{
-		{"enabled with secret", "true", "", "s3cr3t", true},
-		{"enabled without secret", "true", "", "", false},
-		{"disabled", "false", "", "s3cr3t", false},
-		{"accel false suppresses route", "true", "false", "s3cr3t", false},
-		{"default off", "", "", "s3cr3t", false},
-		{"default off without secret", "", "", "", false},
-		{"legacy flag enables with secret", "", "true", "s3cr3t", true},
-		{"legacy flag alone without secret", "", "true", "", false},
+		{"enabled with secret", "true", "", "s3cr3t", true, true},
+		{"enabled without secret", "true", "", "", true, false},
+		{"disabled", "false", "", "s3cr3t", true, false},
+		{"accel false suppresses route", "true", "false", "s3cr3t", true, false},
+		{"default off", "", "", "s3cr3t", true, false},
+		{"default off without secret", "", "", "", true, false},
+		{"legacy flag enables with secret", "", "true", "s3cr3t", true, true},
+		{"legacy flag alone without secret", "", "true", "", true, false},
+		{"engine down with secret", "true", "", "s3cr3t", false, false},
+		{"engine down legacy flag", "", "true", "s3cr3t", false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,10 +96,26 @@ func TestEffectiveEnabled(t *testing.T) {
 			t.Setenv("SMATRIX_ACCEL_ENABLED", tc.accel)
 			t.Setenv("ORTT_SECRET", tc.secret)
 			t.Setenv("SMATRIX_ACCEL_SECRET", "")
+			if tc.listen {
+				t.Setenv("ORTT_FORWARD_PORT", startTestListener(t))
+			} else {
+				t.Setenv("ORTT_FORWARD_PORT", closedTestPort(t))
+			}
 			if got := EffectiveEnabled(); got != tc.want {
 				t.Fatalf("EffectiveEnabled() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestForwarderListening(t *testing.T) {
+	t.Setenv("ORTT_FORWARD_PORT", startTestListener(t))
+	if !ForwarderListening() {
+		t.Fatal("expected listening with a live listener")
+	}
+	t.Setenv("ORTT_FORWARD_PORT", closedTestPort(t))
+	if ForwarderListening() {
+		t.Fatal("expected not listening with a closed port")
 	}
 }
 

@@ -15,6 +15,7 @@ func TestCompileToSingbox(t *testing.T) {
 	t.Setenv("ORTT_ENABLED", "true")
 	t.Setenv("ORTT_SECRET", "test-secret-32-bytes-for-unit-test")
 	t.Setenv("SMATRIX_DATA_DIR", dir)
+	t.Setenv("ORTT_FORWARD_PORT", startTestListener(t))
 	certPath, keyPath, _, err := EnsureSelfSignedPair(dir, "unit", "www.bing.com", nil, []string{"www.bing.com"})
 	if err != nil {
 		t.Fatalf("cert: %v", err)

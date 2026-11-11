@@ -1,8 +1,31 @@
 package singbox
 
 import (
+	"net"
+	"strconv"
 	"testing"
 )
+
+func startTestListener(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	return strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+}
+
+func closedTestPort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	return strconv.Itoa(port)
+}
 
 func TestCompileToSingbox_OrttGate(t *testing.T) {
 	mkUI := func(t *testing.T, dir string) UIData {
@@ -25,13 +48,15 @@ func TestCompileToSingbox_OrttGate(t *testing.T) {
 		ortt      string
 		accel     string
 		secret    string
+		listen    bool
 		wantRoute bool
 	}{
-		{"enabled with secret adds route", "true", "", "test-secret-32", true},
-		{"enabled without secret adds no route", "true", "", "", false},
-		{"disabled adds no route", "false", "", "test-secret-32", false},
-		{"accel false suppresses route", "true", "false", "test-secret-32", false},
-		{"default off adds no route", "", "", "test-secret-32", false},
+		{"enabled with secret adds route", "true", "", "test-secret-32", true, true},
+		{"enabled without secret adds no route", "true", "", "", true, false},
+		{"disabled adds no route", "false", "", "test-secret-32", true, false},
+		{"accel false suppresses route", "true", "false", "test-secret-32", true, false},
+		{"default off adds no route", "", "", "test-secret-32", true, false},
+		{"engine down with secret adds no route", "true", "", "test-secret-32", false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,6 +66,11 @@ func TestCompileToSingbox_OrttGate(t *testing.T) {
 			t.Setenv("SMATRIX_ACCEL_ENABLED", tc.accel)
 			t.Setenv("ORTT_SECRET", tc.secret)
 			t.Setenv("SMATRIX_ACCEL_SECRET", "")
+			if tc.listen {
+				t.Setenv("ORTT_FORWARD_PORT", startTestListener(t))
+			} else {
+				t.Setenv("ORTT_FORWARD_PORT", closedTestPort(t))
+			}
 			cfg, err := CompileToSingbox(mkUI(t, dir))
 			if err != nil {
 				t.Fatal(err)
