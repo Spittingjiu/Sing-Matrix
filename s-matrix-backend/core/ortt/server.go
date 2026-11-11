@@ -44,7 +44,7 @@ func NewServer(cfg *Config) *Server {
 	dnsMgr := NewDNSManager(5 * time.Minute)
 	pool := NewUpstreamSocketPool(cfg.MaxWarmPerDomain, cfg.MaxTotalSockets, dnsMgr)
 	forwarder := NewLocalForwarder(cfg.ForwardPort, pool)
-	limiter := NewRateLimiter(50.0, 5.0) // 50 global rps, 5 rps per IP
+	limiter := NewRateLimiterWithBurst(50.0, 5.0, 30.0) // 50 global rps, 5 rps per IP, 30 burst
 	replayCache := NewReplayCache()
 
 	return &Server{

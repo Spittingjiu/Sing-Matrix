@@ -1,6 +1,7 @@
 package ortt
 
 import (
+	"math"
 	"sync"
 	"time"
 )
@@ -13,6 +14,9 @@ type RateLimiter struct {
 	globalRate   float64 // tokens per second
 	lastGlobal   time.Time
 
+	perIpRate float64
+	perIpMax  float64
+
 	ipLimiters map[string]*ipBucket
 }
 
@@ -22,11 +26,26 @@ type ipBucket struct {
 }
 
 func NewRateLimiter(globalRPS float64, perIpRPS float64) *RateLimiter {
+	return NewRateLimiterWithBurst(globalRPS, perIpRPS, math.Max(5.0, perIpRPS))
+}
+
+func NewRateLimiterWithBurst(globalRPS float64, perIpRPS float64, perIpBurst float64) *RateLimiter {
+	if globalRPS <= 0 {
+		globalRPS = 1.0
+	}
+	if perIpRPS <= 0 {
+		perIpRPS = 1.0
+	}
+	if perIpBurst < 1.0 {
+		perIpBurst = 1.0
+	}
 	return &RateLimiter{
 		globalTokens: globalRPS,
 		globalMax:    globalRPS,
 		globalRate:   globalRPS,
 		lastGlobal:   time.Now(),
+		perIpRate:    perIpRPS,
+		perIpMax:     perIpBurst,
 		ipLimiters:   make(map[string]*ipBucket),
 	}
 }
@@ -40,6 +59,9 @@ func (rl *RateLimiter) Allow(ip string) bool {
 
 	// 1. Global limit check
 	elapsed := now.Sub(rl.lastGlobal).Seconds()
+	if elapsed < 0 {
+		elapsed = 0
+	}
 	rl.lastGlobal = now
 	rl.globalTokens += elapsed * rl.globalRate
 	if rl.globalTokens > rl.globalMax {
@@ -49,17 +71,20 @@ func (rl *RateLimiter) Allow(ip string) bool {
 		return false
 	}
 
-	// 2. Per-IP limit check (max 30 tokens burst, 10 rps)
+	// 2. Per-IP limit check
 	b, exists := rl.ipLimiters[ip]
 	if !exists {
-		b = &ipBucket{tokens: 30.0, last: now}
+		b = &ipBucket{tokens: rl.perIpMax, last: now}
 		rl.ipLimiters[ip] = b
 	} else {
 		ipElapsed := now.Sub(b.last).Seconds()
+		if ipElapsed < 0 {
+			ipElapsed = 0
+		}
 		b.last = now
-		b.tokens += ipElapsed * 10.0 // 10 tokens per sec
-		if b.tokens > 30.0 {
-			b.tokens = 30.0
+		b.tokens += ipElapsed * rl.perIpRate
+		if b.tokens > rl.perIpMax {
+			b.tokens = rl.perIpMax
 		}
 	}
 

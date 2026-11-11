@@ -89,6 +89,7 @@ func RenameInboundHandler(db *gorm.DB, manager *singbox.SingboxManager, configPa
 		}
 		if oldTag != newTag {
 			db.Model(&models.Outbound{}).Where("tag = ?", oldTag).Update("tag", newTag)
+			_ = renameClientMeta(configPath, oldTag, newTag)
 		}
 		if err := rebuildFromDB(db, manager, configPath); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "renamed, rebuild failed: " + err.Error()})
@@ -191,8 +192,49 @@ func rebuildFromDB(db *gorm.DB, manager *singbox.SingboxManager, configPath stri
 	}
 
 	ui := singbox.UIData{Nodes: nodes, Edges: edges}
-	if _, err := singbox.CompileAndWrite(ui, configPath); err != nil {
+	cfg, err := singbox.CompileAndWrite(ui, configPath)
+	if err != nil {
 		return fmt.Errorf("compile: %w", err)
 	}
+	// Keep SQLite ports in sync if the compiler had to reallocate any invalid/colliding port.
+	compiledPorts := map[string]int{}
+	for _, ci := range cfg.Inbounds {
+		if ci.Tag != "" && ci.ListenPort > 0 {
+			compiledPorts[ci.Tag] = ci.ListenPort
+		}
+	}
+	for _, ib := range inbounds {
+		if p, ok := compiledPorts[ib.Tag]; ok && p != ib.Port {
+			_ = db.Model(&models.Inbound{}).Where("id = ?", ib.ID).Update("port", p).Error
+		}
+	}
 	return manager.Restart()
+}
+
+func renameClientMeta(configPath, oldTag, newTag string) error {
+	if oldTag == "" || newTag == "" || oldTag == newTag {
+		return nil
+	}
+	metaPath := configPath + ".client.json"
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return nil
+	}
+	var root struct {
+		Inbounds map[string]map[string]string `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &root); err != nil || root.Inbounds == nil {
+		return nil
+	}
+	entry, ok := root.Inbounds[oldTag]
+	if !ok {
+		return nil
+	}
+	root.Inbounds[newTag] = entry
+	delete(root.Inbounds, oldTag)
+	out, err := json.MarshalIndent(map[string]interface{}{"inbounds": root.Inbounds}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(metaPath, out, 0644)
 }

@@ -175,3 +175,49 @@ func TestRebuildFromDBEmptyOrttRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestRebuildFromDBSyncsPortAndRenameClientMeta(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	manager := singbox.NewSingboxManager("/bin/true", configPath, filepath.Join(dir, "singbox.log"))
+
+	if _, _, _, err := singbox.EnsureSelfSignedPair(dir, "sync", "www.bing.com", nil, []string{"www.bing.com"}); err != nil {
+		t.Fatalf("cert: %v", err)
+	}
+	db, err := openTestDB(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	// Reserved port 19088 forces compiler to reallocate a free port; DB must stay in sync.
+	payload, _ := json.Marshal(map[string]interface{}{
+		"password": "pw-sync", "server_name": "www.bing.com",
+		"certificate_path": filepath.Join(dir, "sync.pem"), "key_path": filepath.Join(dir, "sync.key"),
+	})
+	row := models.Inbound{Tag: "sync-node", Type: "anytls", Port: 19088, Payload: string(payload), Enabled: true}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := rebuildFromDB(db, manager, configPath); err != nil && !strings.Contains(err.Error(), "restart") && !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("rebuild: %v", err)
+	}
+	var updated models.Inbound
+	if err := db.First(&updated, row.ID).Error; err != nil {
+		t.Fatalf("reload row: %v", err)
+	}
+	if updated.Port == 19088 || updated.Port <= 0 {
+		t.Fatalf("expected DB port synced away from reserved 19088, got %d", updated.Port)
+	}
+
+	// Verify renameClientMeta moves key cleanly.
+	metaInit := []byte(`{"inbounds":{"old-name":{"public_key":"pk1","short_id":"sid1"}}}`)
+	if err := os.WriteFile(configPath+".client.json", metaInit, 0644); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+	if err := renameClientMeta(configPath, "old-name", "new-name"); err != nil {
+		t.Fatalf("renameClientMeta: %v", err)
+	}
+	metaRaw, _ := os.ReadFile(configPath + ".client.json")
+	if strings.Contains(string(metaRaw), "old-name") || !strings.Contains(string(metaRaw), "new-name") {
+		t.Fatalf("expected key renamed in client meta, got: %s", metaRaw)
+	}
+}

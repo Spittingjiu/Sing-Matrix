@@ -93,6 +93,33 @@ func TestRateLimiter(t *testing.T) {
 	}
 }
 
+func TestRateLimiter_HonorsPerIpAndGlobal(t *testing.T) {
+	rl := NewRateLimiterWithBurst(8.0, 2.0, 3.0)
+	for i := 0; i < 3; i++ {
+		if !rl.Allow("10.0.0.1") {
+			t.Fatalf("expected IP1 burst %d allowed", i)
+		}
+	}
+	if rl.Allow("10.0.0.1") {
+		t.Fatalf("expected IP1 throttled after burst=3")
+	}
+	// Different IP still has its own per-IP bucket within global limit
+	for i := 0; i < 3; i++ {
+		if !rl.Allow("10.0.0.2") {
+			t.Fatalf("expected IP2 burst %d allowed", i)
+		}
+	}
+	// Global bucket started at 8, 6 consumed -> 2 remaining for IP3
+	for i := 0; i < 2; i++ {
+		if !rl.Allow("10.0.0.3") {
+			t.Fatalf("expected IP3 %d allowed within global limit", i)
+		}
+	}
+	if rl.Allow("10.0.0.3") {
+		t.Fatalf("expected IP3 throttled after global limit reached")
+	}
+}
+
 func TestConcurrentSessionAccess_DataRaceFree(t *testing.T) {
 	sess := &ClientSession{RemoteAddr: "192.168.1.100:12345"}
 	var wg sync.WaitGroup

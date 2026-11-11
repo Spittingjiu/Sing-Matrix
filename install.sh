@@ -291,11 +291,24 @@ SM_BIN_PATH="${SM_BIN_PATH:-/usr/local/bin/sm}"
 install_sm() {
   mkdir -p "${SM_LIB_DIR}" "$(dirname "${SM_BIN_PATH}")"
   local installed="${SM_LIB_DIR}/install.sh"
-  if [ -f "$0" ] && head -1 "$0" 2>/dev/null | grep -q '^#!.*bash'; then
+  local self_real="" inst_real=""
+  self_real="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+  inst_real="$(readlink -f "${installed}" 2>/dev/null || printf '%s' "${installed}")"
+  if [ "${ACTION:-install}" = "upgrade" ] || [ ! -f "$0" ] || ! head -1 "$0" 2>/dev/null | grep -q '^#!.*bash'; then
+    local tmp_sm
+    tmp_sm="$(mktemp)"
+    if curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/install.sh" -o "${tmp_sm}" && head -1 "${tmp_sm}" 2>/dev/null | grep -q '^#!.*bash'; then
+      mv -f "${tmp_sm}" "${installed}"
+    else
+      rm -f "${tmp_sm}"
+      if [ "${self_real}" != "${inst_real}" ] && [ -f "$0" ]; then
+        cp -a "$0" "${installed}"
+      else
+        warn "无法拉取最新管理脚本，保留现有版本"
+      fi
+    fi
+  elif [ "${self_real}" != "${inst_real}" ]; then
     cp -a "$0" "${installed}"
-  else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/install.sh" -o "${installed}" \
-      || warn "无法保存管理脚本，sm 命令可能不可用"
   fi
   chmod +x "${installed}" 2>/dev/null || true
   cat > "${SM_BIN_PATH}" <<EOF
