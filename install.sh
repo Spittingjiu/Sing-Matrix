@@ -145,6 +145,7 @@ install_binary() {
 }
 
 gen_secret() { head -c 24 /dev/urandom | base64 | tr -d '/+=\n' | cut -c1-24; }
+gen_ortt_secret() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 gen_jwt()    { head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | cut -c1-43; }
 
 seed_credentials() {
@@ -172,6 +173,16 @@ write_env() {
     ok "已生成 JWT 密钥"
   else
     ok "保留已有 JWT 密钥"
+  fi
+  # ORTT P0: the engine refuses to start without ORTT_SECRET while the
+  # compiler still routes TCP 443 to the dead forwarder. Generate a secret
+  # on install when none is configured (an empty value counts as none);
+  # never print it.
+  if ! grep -Eq '^ORTT_SECRET=.+' "${envf}" 2>/dev/null; then
+    sed -i '/^ORTT_SECRET=/d' "${envf}" 2>/dev/null || true
+    printf 'ORTT_SECRET=%s\n' "$(gen_ortt_secret)" >> "${envf}"
+    chmod 600 "${envf}"
+    ok "已生成 ORTT 密钥"
   fi
 }
 

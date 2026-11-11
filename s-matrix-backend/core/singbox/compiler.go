@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"s-matrix/core/ortt"
 )
 
 type UIData struct {
@@ -67,6 +69,26 @@ func safePassword(v string) string {
 		return string(b)
 	}
 	return v
+}
+
+// OrttWarmPoolOutbound returns the SOCKS5 outbound for the ORTT warm pool.
+func OrttWarmPoolOutbound() Outbound {
+	return Outbound{
+		Type:       "socks",
+		Tag:        "ortt-warm-pool",
+		Server:     "127.0.0.1",
+		ServerPort: 39998,
+		Version:    "5",
+	}
+}
+
+// OrttWarmPoolRule returns the TCP-443 route rule for the ORTT warm pool.
+func OrttWarmPoolRule() RouteRule {
+	return RouteRule{
+		Network:  "tcp",
+		Port:     []int{443},
+		Outbound: "ortt-warm-pool",
+	}
 }
 
 func CompileToSingbox(uiData UIData) (Config, error) {
@@ -272,21 +294,9 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			}
 		}
 	}
-	orttEnabled := os.Getenv("ORTT_ENABLED") != "false" && os.Getenv("ORTT_ENABLED") != "0"
-	if orttEnabled {
-		cfg.Outbounds = append(cfg.Outbounds, Outbound{
-			Type:       "socks",
-			Tag:        "ortt-warm-pool",
-			Server:     "127.0.0.1",
-			ServerPort: 39998,
-			Version:    "5",
-		})
-		orttRule := RouteRule{
-			Network:  "tcp",
-			Port:     []int{443},
-			Outbound: "ortt-warm-pool",
-		}
-		cfg.Route.Rules = append([]RouteRule{orttRule}, cfg.Route.Rules...)
+	if ortt.EffectiveEnabled() {
+		cfg.Outbounds = append(cfg.Outbounds, OrttWarmPoolOutbound())
+		cfg.Route.Rules = append([]RouteRule{OrttWarmPoolRule()}, cfg.Route.Rules...)
 	}
 	return cfg, nil
 }

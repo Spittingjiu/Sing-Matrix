@@ -1,7 +1,6 @@
 package singbox
 
 import (
-	"os"
 	"testing"
 )
 
@@ -17,6 +16,11 @@ func TestCustomAANodeCompilesAsOutbound(t *testing.T) {
 		},
 		Edges: []UIEdge{{Source: "hy2", Target: "aa"}},
 	}
+	// The ORTT route is only compiled when ORTT is enabled AND a secret is
+	// configured (P0 fix); opt in explicitly for this assertion.
+	t.Setenv("ORTT_ENABLED", "true")
+	t.Setenv("ORTT_SECRET", "test-secret-32-bytes-for-unit-test")
+	t.Setenv("SMATRIX_DATA_DIR", t.TempDir())
 	cfg, err := CompileToSingbox(ui)
 	if err != nil {
 		t.Fatal(err)
@@ -30,10 +34,7 @@ func TestCustomAANodeCompilesAsOutbound(t *testing.T) {
 	if !found {
 		t.Fatalf("AA outbound not generated: %+v", cfg.Outbounds)
 	}
-	expectedRules := 1
-	if os.Getenv("ORTT_ENABLED") != "false" && os.Getenv("ORTT_ENABLED") != "0" {
-		expectedRules = 2
-	}
+	expectedRules := 2
 	if len(cfg.Route.Rules) != expectedRules {
 		t.Fatalf("expected %d rules, got: %+v", expectedRules, cfg.Route.Rules)
 	}

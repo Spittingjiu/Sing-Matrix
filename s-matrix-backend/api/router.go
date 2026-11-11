@@ -44,7 +44,7 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	v1.GET("/discover", DiscoveryHandler(dep.ConfigPath))
 	secured := v1.Group("")
 	secured.Use(JWTMiddleware())
-	v1.GET("/ortt/stats", func(c *gin.Context) { c.JSON(http.StatusOK, ortt.GetStats()) })
+	secured.GET("/ortt/stats", func(c *gin.Context) { c.JSON(http.StatusOK, ortt.GetStats()) })
 	secured.GET("/accelerator/stats", func(c *gin.Context) { c.JSON(http.StatusOK, ortt.GetStats()) })
 	secured.GET("/singbox/test-config", func(c *gin.Context) { c.JSON(http.StatusOK, singbox.BuildTestConfig()) })
 	secured.GET("/singbox/share-links", ShareLinksHandler(dep.ConfigPath))

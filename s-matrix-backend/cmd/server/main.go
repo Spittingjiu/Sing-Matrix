@@ -8,9 +8,9 @@ import (
 
 	"s-matrix/api"
 	"s-matrix/core/acme"
+	"s-matrix/core/ortt"
 	"s-matrix/core/singbox"
 	"s-matrix/models"
-	"s-matrix/core/ortt"
 	"strconv"
 	"strings"
 )
@@ -82,15 +82,15 @@ func main() {
 		if cerr := singbox.CheckConfig(raw); cerr != nil {
 			log.Printf("existing config rejected (%v); rebuilding from database", cerr)
 			needRebuild = true
-		} else if !strings.Contains(string(raw), "ortt-warm-pool") {
-			log.Printf("config missing ortt-warm-pool; rebuilding from database")
+		} else if ortt.EffectiveEnabled() != strings.Contains(string(raw), "ortt-warm-pool") {
+			log.Printf("config ortt-warm-pool presence does not match ORTT state; rebuilding from database")
 			needRebuild = true
 		}
 		if needRebuild {
 			if rerr := api.RebuildConfig(db, manager, configPath); rerr != nil {
 				log.Printf("rebuild failed: %v", rerr)
 			} else {
-				log.Printf("config rebuilt with ORTT warm pool")
+				log.Printf("config rebuilt from database")
 			}
 		}
 		if err := manager.Start(); err != nil {

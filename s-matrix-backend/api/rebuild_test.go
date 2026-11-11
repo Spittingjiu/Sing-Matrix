@@ -100,3 +100,48 @@ func TestRebuildFromDBKeepsEveryEnabledInbound(t *testing.T) {
 func openTestDB(path string) (*gorm.DB, error) {
 	return models.OpenDatabase(path)
 }
+
+// TestRebuildFromDBEmptyOrttRoute guards the P0 fresh-install case: with no
+// nodes, the rebuild writes a hand-built empty config, which must still
+// carry the ORTT warm-pool route when ORTT is enabled with a secret, and
+// must not carry it when ORTT is off.
+func TestRebuildFromDBEmptyOrttRoute(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	manager := singbox.NewSingboxManager("/bin/true", configPath, filepath.Join(dir, "singbox.log"))
+	db, err := openTestDB(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	// No inbounds seeded: the empty-DB path.
+	cases := []struct {
+		name      string
+		ortt      string
+		secret    string
+		wantRoute bool
+	}{
+		{"enabled with secret", "true", "test-secret-32", true},
+		{"enabled without secret", "true", "", false},
+		{"disabled", "false", "test-secret-32", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SMATRIX_DATA_DIR", dir)
+			t.Setenv("ORTT_ENABLED", tc.ortt)
+			t.Setenv("SMATRIX_ACCEL_ENABLED", "")
+			t.Setenv("ORTT_SECRET", tc.secret)
+			t.Setenv("SMATRIX_ACCEL_SECRET", "")
+			if err := rebuildFromDB(db, manager, configPath); err != nil {
+				t.Fatalf("rebuild: %v", err)
+			}
+			raw, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("read config: %v", err)
+			}
+			got := strings.Contains(string(raw), "ortt-warm-pool")
+			if got != tc.wantRoute {
+				t.Fatalf("ortt-warm-pool present = %v, want %v (config: %s)", got, tc.wantRoute, raw)
+			}
+		})
+	}
+}

@@ -10,6 +10,11 @@ import (
 
 func TestCompileToSingbox(t *testing.T) {
 	dir := t.TempDir()
+	// The ORTT route is only compiled when ORTT is enabled AND a secret is
+	// configured (P0 fix); opt in explicitly for this assertion.
+	t.Setenv("ORTT_ENABLED", "true")
+	t.Setenv("ORTT_SECRET", "test-secret-32-bytes-for-unit-test")
+	t.Setenv("SMATRIX_DATA_DIR", dir)
 	certPath, keyPath, _, err := EnsureSelfSignedPair(dir, "unit", "www.bing.com", nil, []string{"www.bing.com"})
 	if err != nil {
 		t.Fatalf("cert: %v", err)
@@ -29,21 +34,11 @@ func TestCompileToSingbox(t *testing.T) {
 	if len(cfg.Inbounds) != 1 || cfg.Inbounds[0].Tag != "hy2-main" {
 		t.Fatalf("bad inbounds: %+v", cfg.Inbounds)
 	}
-	expectedRules := 1
-	if os.Getenv("ORTT_ENABLED") != "false" && os.Getenv("ORTT_ENABLED") != "0" {
-		expectedRules = 2
+	if cfg.Route.Rules[0].Outbound != "ortt-warm-pool" || cfg.Route.Rules[0].Network != "tcp" || len(cfg.Route.Rules[0].Port) != 1 || cfg.Route.Rules[0].Port[0] != 443 {
+		t.Fatalf("bad ortt route: %+v", cfg.Route.Rules[0])
 	}
-	if expectedRules == 2 {
-		if cfg.Route.Rules[0].Outbound != "ortt-warm-pool" || cfg.Route.Rules[0].Network != "tcp" || len(cfg.Route.Rules[0].Port) != 1 || cfg.Route.Rules[0].Port[0] != 443 {
-			t.Fatalf("bad ortt route: %+v", cfg.Route.Rules[0])
-		}
-		if cfg.Route.Rules[1].Inbound != "hy2-main" || cfg.Route.Rules[1].RuleSet != "youtube" || cfg.Route.Rules[1].Outbound != "direct" {
-			t.Fatalf("bad route: %+v", cfg.Route)
-		}
-	} else {
-		if len(cfg.Route.Rules) != 1 || cfg.Route.Rules[0].Inbound != "hy2-main" || cfg.Route.Rules[0].RuleSet != "youtube" || cfg.Route.Rules[0].Outbound != "direct" {
-			t.Fatalf("bad route: %+v", cfg.Route)
-		}
+	if cfg.Route.Rules[1].Inbound != "hy2-main" || cfg.Route.Rules[1].RuleSet != "youtube" || cfg.Route.Rules[1].Outbound != "direct" {
+		t.Fatalf("bad route: %+v", cfg.Route)
 	}
 	path := filepath.Join(dir, "config.json")
 	defer os.Remove(path)

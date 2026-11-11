@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"s-matrix/core/ortt"
 	"s-matrix/core/singbox"
 	"s-matrix/models"
 )
@@ -149,6 +150,13 @@ func rebuildFromDB(db *gorm.DB, manager *singbox.SingboxManager, configPath stri
 	}
 	if len(inbounds) == 0 {
 		emptyConfig := singbox.Config{Log: &singbox.Log{Level: "info", Timestamp: true}, DNS: &singbox.DNS{Servers: []singbox.DNSServer{}}, Inbounds: []singbox.Inbound{}, Outbounds: []singbox.Outbound{{Type: "direct", Tag: "direct"}, {Type: "block", Tag: "block"}}, Route: singbox.Route{Final: "direct"}}
+		// Fresh installs have no nodes yet; the empty config must still
+		// carry the warm-pool route when ORTT is enabled, or the startup
+		// self-heal rebuilds it on every boot without ever fixing it.
+		if ortt.EffectiveEnabled() {
+			emptyConfig.Outbounds = append(emptyConfig.Outbounds, singbox.OrttWarmPoolOutbound())
+			emptyConfig.Route.Rules = []singbox.RouteRule{singbox.OrttWarmPoolRule()}
+		}
 		raw, _ := json.MarshalIndent(emptyConfig, "", "  ")
 		os.WriteFile(configPath, raw, 0644)
 		return manager.Stop()

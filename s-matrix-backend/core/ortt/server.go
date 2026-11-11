@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,14 +59,84 @@ func NewServer(cfg *Config) *Server {
 	}
 }
 
-// Start launches the ORTT server if enabled (default enabled)
+// envFilePath returns the data-dir env file the engine reads its secret from.
+func envFilePath() string {
+	if dir := strings.TrimSpace(os.Getenv("SMATRIX_DATA_DIR")); dir != "" {
+		return filepath.Join(dir, "env")
+	}
+	return "/opt/sing-matrix/data/env"
+}
+
+// LoadSecret returns the ORTT HMAC secret from the environment or the
+// data-dir env file, or "" when none is configured. The engine refuses to
+// start without a secret, so callers must treat "" as "ORTT unavailable".
+func LoadSecret() string {
+	if s := strings.TrimSpace(os.Getenv("ORTT_SECRET")); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(os.Getenv("SMATRIX_ACCEL_SECRET")); s != "" {
+		return s
+	}
+	data, err := os.ReadFile(envFilePath())
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "ORTT_SECRET=") {
+			continue
+		}
+		if s := strings.TrimSpace(strings.TrimPrefix(line, "ORTT_SECRET=")); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// SecretConfigured reports whether an ORTT secret is available.
+func SecretConfigured() bool { return LoadSecret() != "" }
+
+// accelExplicitlyDisabled reports whether the legacy flag disables ORTT.
+func accelExplicitlyDisabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("SMATRIX_ACCEL_ENABLED")))
+	return v == "false" || v == "0"
+}
+
+// EffectiveEnabled reports whether routing traffic through the ORTT warm
+// pool is safe: ORTT must be explicitly enabled (default off), the legacy
+// flag must not disable it, and a secret must be configured. Without a
+// secret the engine cannot start, so routing to the forwarder would send
+// all TCP 443 traffic to a dead listener.
+func EffectiveEnabled() bool {
+	if accelExplicitlyDisabled() {
+		return false
+	}
+	enabled := strings.ToLower(strings.TrimSpace(os.Getenv("ORTT_ENABLED")))
+	if enabled == "" {
+		enabled = strings.ToLower(strings.TrimSpace(os.Getenv("SMATRIX_ACCEL_ENABLED")))
+	}
+	if enabled == "" || enabled == "false" || enabled == "0" {
+		return false
+	}
+	return SecretConfigured()
+}
+
+// Start launches the ORTT server if explicitly enabled (default disabled)
 func Start(port int) error {
+	if accelExplicitlyDisabled() {
+		log.Printf("[ORTT] 0-RTT 极速预热与保活引擎已显式停用 (SMATRIX_ACCEL_ENABLED=false)")
+		return nil
+	}
 	enabled := strings.ToLower(strings.TrimSpace(os.Getenv("ORTT_ENABLED")))
 	if enabled == "" {
 		enabled = strings.ToLower(strings.TrimSpace(os.Getenv("SMATRIX_ACCEL_ENABLED")))
 	}
 	if enabled == "false" || enabled == "0" {
 		log.Printf("[ORTT] 0-RTT 极速预热与保活引擎已显式停用 (ORTT_ENABLED=false)")
+		return nil
+	}
+	if enabled == "" {
+		log.Printf("[ORTT] ORTT 未显式启用，默认关闭 (ORTT_ENABLED=true 可开启)")
 		return nil
 	}
 
@@ -84,21 +155,7 @@ func Start(port int) error {
 	cfg.Enabled = true
 	cfg.ControlPort = port
 
-	secret := os.Getenv("ORTT_SECRET")
-	if secret == "" {
-		secret = os.Getenv("SMATRIX_ACCEL_SECRET")
-	}
-	if secret == "" {
-		if envData, err := os.ReadFile("/opt/sing-matrix/data/env"); err == nil {
-			for _, line := range strings.Split(string(envData), "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "ORTT_SECRET=") {
-					secret = strings.TrimPrefix(line, "ORTT_SECRET=")
-					break
-				}
-			}
-		}
-	}
+	secret := LoadSecret()
 	if secret == "" {
 		log.Printf("[ORTT] ⚠️ 未配置 ORTT_SECRET 鉴权密钥，ORTT 模块拒绝启动")
 		return nil
@@ -275,8 +332,8 @@ func isProxyConfiguredAndRunning() bool {
 func (s *Server) buildPongPacket(nonceBytes []byte) []byte {
 	pong := make([]byte, 48)
 	copy(pong[0:4], Magic)       // "ORTT"
-	pong[4] = ProtocolVersion     // 0x02
-	pong[5] = CmdPong             // 0x84
+	pong[4] = ProtocolVersion    // 0x02
+	pong[5] = CmdPong            // 0x84
 	copy(pong[6:10], nonceBytes) // Echo Nonce (4 bytes)
 
 	hits := uint32(atomic.LoadInt64(&GlobalStats.PoolHits))
