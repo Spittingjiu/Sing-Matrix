@@ -298,25 +298,36 @@ MIT
 
 ---
 
-## ⚡ 内置 ORTT 极速预热与保活引擎 (0-RTT Prewarm & Keepalive Engine)
+## ⚡ 内置 ORTT 连接预热引擎（Warm-Connection Pool）
 
-S-Matrix 是现代化的轻量级节点管理面板，而 **ORTT (0-RTT Prewarm & Keepalive Engine)** 是深度内置于节点服务端的伴生网络加速与热连接保活引擎，专为消除首包往返延迟而生。
+ORTT 是 S-Matrix 内置的连接预热引擎：它提前与一批常用域名建立好裸 TCP 连接并放在池子里，等真实请求来时直接复用，省掉一次服务器到目标站的 TCP 握手。仅此而已——它不省 TLS 握手，不省浏览器到面板这一段，也不管 QUIC / HTTP3 流量。
 
-### 🌟 核心特性与技术架构
-* **端口与拓扑**：
-  * **控制与心跳端口**：UDP `39999`（可通过环境变量 `ORTT_PORT` 自定义），用于接收 OpenAero 路由器 / AeroProxy 客户端发送的加密鉴权与心跳指令。
-  * **本地预热池转发出站**：TCP `127.0.0.1:39998`（SOCKS5 协议），由 `sing-box` 路由规则将出站端口 443 的 TCP 连接无缝分流至此。
-* **零往返 (0-RTT) 预热矩阵**：
-  * 引擎启动并经由客户端激活后，后台实时维护一个动态热连接池（Socket Pool）。
-  * **全球核心 CDN 节点 (16 个)**：Cloudflare (`www.cloudflare.com`, `cdnjs.cloudflare.com`, `one.one.one.one`)、Google/Gstatic (`www.gstatic.com`, `fonts.gstatic.com`, `gvt1.com`, `gvt2.com`, `yt3.ggpht.com`, `i.ytimg.com`)、GitHub Assets (`github.githubassets.com`, `raw.githubusercontent.com`, `avatars.githubusercontent.com`)、Twitter CDN (`abs.twimg.com`, `pbs.twimg.com`)、OpenAI CDN (`cdn.oaistatic.com`)、jsDelivr (`cdn.jsdelivr.net`)。
-  * **AI 与生产力平台 (8 个)**：ChatGPT (`chatgpt.com`, `api.openai.com`)、Claude (`claude.ai`, `api.anthropic.com`)、Gemini (`gemini.google.com`, `aistudio.google.com`)、Perplexity (`www.perplexity.ai`)、Notion (`www.notion.so`)。
-  * **高频媒体、社交与搜索 (16 个)**：Google 搜索、YouTube (`www.youtube.com`, `m.youtube.com`, `googlevideo.com`)、GitHub (`github.com`, `api.github.com`)、X / Twitter (`x.com`, `api.x.com`)、Telegram (`core.telegram.org`, `web.telegram.org`, `t.me`)、Reddit、Discord (`discord.com`, `gateway.discord.gg`)、Wikipedia、Steam。
-  * 当用户发起 HTTPS (TCP 443) 请求时，预热池中已就绪的 TLS/TCP 连接直接接管，实现 **0-RTT** 极速首包响应；若未命中，自动由本地 LocalForwarder 毫秒级直接回退建立连接。
-* **v2.0 32B HMAC 安全鉴权协议**：
-  * **Magic**：`ORTT`（0x4F, 0x52, 0x54, 0x54），向后兼容支持 `SMTX`（0x53, 0x4D, 0x54, 0x58）。
-  * **PSK 密钥协商**：预共享密钥通过环境变量 `ORTT_SECRET` 动态注入，服务端与客户端保持一致。
-  * 支持重放保护（Replay Window 60s）、会话静默防扫描、基于令牌桶的 Anti-DDoS 动态限速与 45 秒未活跃自动 GC 回收。
-* **环境变量配置**：
-  * `ORTT_ENABLED`：是否启用预热引擎（默认为 `true`，设为 `false` 可完全关闭）。
-  * `ORTT_PORT`：UDP 控制监听端口（默认 `39999`）。
-  * `ORTT_SECRET`：自定义 PSK 鉴权密钥。
+### 它到底能省什么
+
+只有同时满足这三个条件时才有效：连接是冷的、目标是池子里的域名、走 TCP 443。命中时省一次 VPS 到目标站的 TCP 握手（以及一次预先解析好的 DNS 查询）；没命中时转发器直接拨号，和没开它一样。同城或低延迟线路上收益很小，实测甚至可能为负；是否值得开，请用清缓存重复加载、看中位数再决定。
+
+### 端口与拓扑
+
+* **本地预热池转发**：TCP `127.0.0.1:39998`（SOCKS5 协议），`sing-box` 把出站 TCP 443 分流至此。路由只在引擎真正可用时才加上：编译器会先确认 ORTT 已开启、有密钥、且转发器正在监听，否则不加路由，流量走直连。
+* **控制端口**：UDP `39999`（可通过环境变量 `ORTT_PORT` 自定义），接收已鉴权客户端的唤醒 / 心跳指令；同一端口号上 `127.0.0.1` 还跑着一个本地 HTTP 状态接口。仓库内目前暂无配套客户端。
+* **状态接口**：`GET /api/v1/ortt/stats`，需登录（返回 `pool_hits` / `pool_misses` 等）。
+
+### 预热池
+
+* 后台维护一个热连接池：40 个域名，每域名最多 4 条、总共最多 160 条；热连接空闲 8 秒后回收，会话 45 秒过期；每轮每域名最多补 1 条——所以大多数域名实际只有一两条热连接，不是 4 条。
+* **全球核心 CDN 节点 (16 个)**：Cloudflare (`www.cloudflare.com`, `cdnjs.cloudflare.com`, `one.one.one.one`)、Google/Gstatic (`www.gstatic.com`, `fonts.gstatic.com`, `gvt1.com`, `gvt2.com`, `yt3.ggpht.com`, `i.ytimg.com`)、GitHub Assets (`github.githubassets.com`, `raw.githubusercontent.com`, `avatars.githubusercontent.com`)、Twitter CDN (`abs.twimg.com`, `pbs.twimg.com`)、OpenAI CDN (`cdn.oaistatic.com`)、jsDelivr (`cdn.jsdelivr.net`)。
+* **AI 与生产力平台 (8 个)**：ChatGPT (`chatgpt.com`, `api.openai.com`)、Claude (`claude.ai`, `api.anthropic.com`)、Gemini (`gemini.google.com`, `aistudio.google.com`)、Perplexity (`www.perplexity.ai`)、Notion (`www.notion.so`)。
+* **高频媒体、社交与搜索 (16 个)**：Google 搜索、YouTube (`www.youtube.com`, `m.youtube.com`, `googlevideo.com`)、GitHub (`github.com`, `api.github.com`)、X / Twitter (`x.com`, `api.x.com`)、Telegram (`core.telegram.org`, `web.telegram.org`, `t.me`)、Reddit (`www.reddit.com`)、Discord (`discord.com`, `gateway.discord.gg`)、Wikipedia (`www.wikipedia.org`)、Steam (`store.steampowered.com`)。
+* 命中时转发器会等待首个 ServerHello（最长 900ms），慢速或分片的 ClientHello 可能被误判，这是已知待修项。
+
+### 安全鉴权协议（32 字节包）
+
+* **Magic**：`ORTT`（0x4F, 0x52, 0x54, 0x54），向后兼容支持 `SMTX`（0x53, 0x4D, 0x54, 0x58）。
+* **鉴权**：HMAC-SHA256（截断至 16 字节），重放窗口 30 秒；密钥由 `ORTT_SECRET` 提供，一键安装脚本在没有密钥时会自动生成一个 32 字节的随机密钥存好（不打印），也可以自己设置。
+* **限速**：控制面配置了令牌桶限速（全局 50 rps、单 IP 5 rps），但其限流测试目前未通过，正在修复中，暂不宣称防 DDoS 能力。
+
+### 环境变量配置
+
+* `ORTT_ENABLED`：是否启用预热引擎。代码默认关闭；一键安装脚本会生成密钥并开启（`ORTT_ENABLED=true`）。设为 `false` 可完全关闭，关闭后编译器也不加路由。
+* `ORTT_PORT`：控制监听端口（默认 `39999`）。
+* `ORTT_SECRET`：预共享密钥；安装时没有会由脚本自动生成并存入数据目录的 `env` 文件（600 权限），也可自行设置。
