@@ -56,7 +56,7 @@ type Config struct {
 	MaxWarmPerDomain int               `json:"max_warm_per_domain"` // Warm sockets per domain (default 2)
 	MaxTotalSockets  int               `json:"max_total_sockets"`   // Max global warm sockets (default 96)
 	ReplenishDelay   time.Duration     `json:"replenish_delay"`     // Delay between parallel dials (default 80ms)
-	IdleTimeout      time.Duration     `json:"idle_timeout"`        // Max socket idle life (default 15s)
+	IdleTimeout      time.Duration     `json:"idle_timeout"`        // Max socket idle life (default 8s)
 	SessionExpire    time.Duration     `json:"session_expire"`      // Session timeout (default 45s)
 }
 

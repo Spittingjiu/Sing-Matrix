@@ -91,14 +91,7 @@ func VerifyPacketWithKeys(keyRing map[uint16][]byte, defaultSecret []byte, raw [
 		return 0, 0, 0, ErrClockSkew
 	}
 
-	// 4. Nonce sliding-window uniqueness check
-	if cache != nil {
-		if !cache.CheckAndAdd(nonce, time.Now()) {
-			return 0, 0, 0, ErrReplayDetected
-		}
-	}
-
-	// 5. HMAC-SHA256 signature verification with multi-key fallback
+	// 4. HMAC-SHA256 signature verification with multi-key fallback
 	actualSig := raw[16:32]
 	var matchedKey []byte
 
@@ -129,10 +122,17 @@ func VerifyPacketWithKeys(keyRing map[uint16][]byte, defaultSecret []byte, raw [
 		}
 	}
 
-
-
 	if matchedKey == nil {
 		return 0, 0, 0, ErrHMACMismatch
+	}
+
+	// 5. Nonce sliding-window uniqueness check, only after the packet is
+	// authenticated: an unauthenticated packet must not consume its nonce,
+	// or an attacker could evict a legitimate packet's nonce from the cache.
+	if cache != nil {
+		if !cache.CheckAndAdd(nonce, time.Now()) {
+			return 0, 0, 0, ErrReplayDetected
+		}
 	}
 
 	return cmd, ts, keyID, nil

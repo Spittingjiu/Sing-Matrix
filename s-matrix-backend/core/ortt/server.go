@@ -154,7 +154,7 @@ func EffectiveEnabled() bool {
 // Start launches the ORTT server if explicitly enabled (default disabled)
 func Start(port int) error {
 	if accelExplicitlyDisabled() {
-		log.Printf("[ORTT] 0-RTT 极速预热与保活引擎已显式停用 (SMATRIX_ACCEL_ENABLED=false)")
+		log.Printf("[ORTT] 连接预热与保活引擎已显式停用 (SMATRIX_ACCEL_ENABLED=false)")
 		return nil
 	}
 	enabled := strings.ToLower(strings.TrimSpace(os.Getenv("ORTT_ENABLED")))
@@ -162,7 +162,7 @@ func Start(port int) error {
 		enabled = strings.ToLower(strings.TrimSpace(os.Getenv("SMATRIX_ACCEL_ENABLED")))
 	}
 	if enabled == "false" || enabled == "0" {
-		log.Printf("[ORTT] 0-RTT 极速预热与保活引擎已显式停用 (ORTT_ENABLED=false)")
+		log.Printf("[ORTT] 连接预热与保活引擎已显式停用 (ORTT_ENABLED=false)")
 		return nil
 	}
 	if enabled == "" {
@@ -216,7 +216,7 @@ func (s *Server) Run() error {
 	}
 	s.udpConn = conn
 
-	log.Printf("[ORTT] 🛡️ ORTT 0-RTT 极速预热与保活引擎 v2.0 已就绪 (UDP 控制: :%d, SOCKS5 复用池: 127.0.0.1:%d)", s.cfg.ControlPort, s.cfg.ForwardPort)
+	log.Printf("[ORTT] 🛡️ ORTT 连接预热与保活引擎 v2.0 已就绪 (UDP 控制: :%d, SOCKS5 复用池: 127.0.0.1:%d)", s.cfg.ControlPort, s.cfg.ForwardPort)
 	log.Printf("[ORTT] 🔐 HMAC-SHA256 签名鉴权与防重放机制已激活，保护 %d 个核心站点与全球 CDN 矩阵", len(s.cfg.TargetDomains))
 
 	// 3. Start Local HTTP Stats Listener on 127.0.0.1:39999

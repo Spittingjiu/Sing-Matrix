@@ -54,6 +54,28 @@ func TestAuthentication_Tampered(t *testing.T) {
 	}
 }
 
+func TestAuthentication_BadHMACDoesNotConsumeNonce(t *testing.T) {
+	cache := NewReplayCache()
+	pkt := BuildPacket(testSecret, CmdWakeup, 1)
+	tampered := make([]byte, len(pkt))
+	copy(tampered, pkt)
+	tampered[5] = CmdSleep // Same nonce, bad HMAC (not re-signed)
+
+	// Tampered packet must fail authentication ...
+	if _, _, _, err := VerifyPacket(testSecret, tampered, cache); err != ErrHMACMismatch {
+		t.Fatalf("expected ErrHMACMismatch, got: %v", err)
+	}
+	// ... but must NOT have consumed the nonce: the original packet with
+	// the same nonce still verifies.
+	if _, _, _, err := VerifyPacket(testSecret, pkt, cache); err != nil {
+		t.Fatalf("expected original packet to verify after bad-HMAC attempt, got: %v", err)
+	}
+	// And a replay of the now-verified packet is still rejected.
+	if _, _, _, err := VerifyPacket(testSecret, pkt, cache); err != ErrReplayDetected {
+		t.Fatalf("expected ErrReplayDetected on replay, got: %v", err)
+	}
+}
+
 func TestAuthentication_ClockSkewExpired(t *testing.T) {
 	cache := NewReplayCache()
 	pkt := make([]byte, PacketWireLength)
