@@ -126,7 +126,7 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-reality":
-			dest := str(node.Data, "dest", str(node.Data, "server_name", "www.cloudflare.com"))
+			dest := str(node.Data, "dest", str(node.Data, "server_name", "www.apple.com"))
 			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)

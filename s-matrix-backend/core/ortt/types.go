@@ -95,16 +95,37 @@ func DefaultConfig() *Config {
 	}
 }
 
+// NodeKeyEntry binds a per-node KeyID (>= 2) to its ORTT ID, inbound tag, and secret bytes.
+type NodeKeyEntry struct {
+	OrttID     string `json:"ortt_id"`
+	KeyID      uint16 `json:"ortt_key_id"`
+	InboundTag string `json:"inbound_tag,omitempty"`
+	Secret     []byte `json:"-"`
+}
+
+// NodeOrttStats tracks per-ortt_id control-plane telemetry.
+type NodeOrttStats struct {
+	OrttID         string `json:"ortt_id"`
+	KeyID          uint16 `json:"ortt_key_id,omitempty"`
+	InboundTag     string `json:"inbound_tag,omitempty"`
+	LastWakeUnix   int64  `json:"last_wake_unix"`
+	WakeCount      int64  `json:"wake_count"`
+	HeartbeatCount int64  `json:"heartbeat_count"`
+	PingCount      int64  `json:"ping_count"`
+	LastSeenUnix   int64  `json:"last_seen_unix,omitempty"`
+}
+
 // Stats provides atomic real-time observability telemetry
 type Stats struct {
-	PoolHits        int64 `json:"pool_hits"`         // Reused pre-connected socket successfully
-	PoolMisses      int64 `json:"pool_misses"`       // Fell back to on-demand direct dial
-	PoolReplays     int64 `json:"pool_replays"`      // Stale/dead warm sockets recovered by first-byte replay
-	ActiveWarmConns int64 `json:"active_warm_conns"` // Idle sockets waiting in pool
-	PacketsReceived int64 `json:"packets_received"`  // Control packets
-	PacketsDropped  int64 `json:"packets_dropped"`   // Auth failed, replayed or rate limited
-	ActiveSessions  int64 `json:"active_sessions"`   // Active authenticated client sessions
-	UptimeSeconds   int64 `json:"uptime_seconds"`
+	PoolHits        int64                    `json:"pool_hits"`         // Reused pre-connected socket successfully
+	PoolMisses      int64                    `json:"pool_misses"`       // Fell back to on-demand direct dial
+	PoolReplays     int64                    `json:"pool_replays"`      // Stale/dead warm sockets recovered by first-byte replay
+	ActiveWarmConns int64                    `json:"active_warm_conns"` // Idle sockets waiting in pool
+	PacketsReceived int64                    `json:"packets_received"`  // Control packets
+	PacketsDropped  int64                    `json:"packets_dropped"`   // Auth failed, replayed or rate limited
+	ActiveSessions  int64                    `json:"active_sessions"`   // Active authenticated client sessions
+	UptimeSeconds   int64                    `json:"uptime_seconds"`
+	Nodes           map[string]NodeOrttStats `json:"nodes,omitempty"`
 }
 
 var GlobalStats Stats

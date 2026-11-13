@@ -28,16 +28,18 @@ func IsPortAvailable(port int) bool {
 	if port <= 0 || port > 65535 || ReservedPorts[port] {
 		return false
 	}
-	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
-	if err != nil {
-		return false
+	for _, host := range []string{"0.0.0.0", "127.0.0.1"} {
+		ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
+		if err != nil {
+			return false
+		}
+		_ = ln.Close()
+		udp, err := net.ListenPacket("udp", fmt.Sprintf("%s:%d", host, port))
+		if err != nil {
+			return false
+		}
+		_ = udp.Close()
 	}
-	_ = ln.Close()
-	udp, err := net.ListenPacket("udp", fmt.Sprintf("0.0.0.0:%d", port))
-	if err != nil {
-		return false
-	}
-	_ = udp.Close()
 	return true
 }
 

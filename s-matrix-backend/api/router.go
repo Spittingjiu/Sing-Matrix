@@ -39,15 +39,15 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	v1.POST("/login", LoginHandler)
 	v1.POST("/token", LoginHandler)
 	v1.GET("/auth/challenge", ChallengeHandler)
-	v1.GET("/sub/:token", SubscriptionHandler(dep.ConfigPath))
+	v1.GET("/sub/:token", SubscriptionHandlerWithDB(dep.ConfigPath, dep.DB))
 	v1.GET("/qr.png", QRHandler())
-	v1.GET("/discover", DiscoveryHandler(dep.ConfigPath))
+	v1.GET("/discover", DiscoveryHandlerWithDB(dep.ConfigPath, dep.DB))
 	secured := v1.Group("")
 	secured.Use(JWTMiddleware())
 	secured.GET("/ortt/stats", func(c *gin.Context) { c.JSON(http.StatusOK, ortt.GetStats()) })
 	secured.GET("/accelerator/stats", func(c *gin.Context) { c.JSON(http.StatusOK, ortt.GetStats()) })
 	secured.GET("/singbox/test-config", func(c *gin.Context) { c.JSON(http.StatusOK, singbox.BuildTestConfig()) })
-	secured.GET("/singbox/share-links", ShareLinksHandler(dep.ConfigPath))
+	secured.GET("/singbox/share-links", ShareLinksHandlerWithDB(dep.ConfigPath, dep.DB))
 	secured.GET("/logs/ws", LogsWSHandler(dep.LogPath))
 	secured.POST("/quick/reality", QuickRealityHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB}))
 	secured.POST("/quick/hy2", QuickHY2Handler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB}))
@@ -67,11 +67,15 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 	secured.GET("/domain/certs", ACMECertListHandler(acmeDeps))
 	secured.POST("/quick/anytls-domain", QuickAnyTLSDomainHandler(quickDeps{Manager: dep.Manager, ConfigPath: dep.ConfigPath, DB: dep.DB, CertDir: dep.CertDir, DataDir: dep.DataDir, ACME: dep.ACME, PanelAddr: dep.PanelAddr}))
 	if dep.DB != nil {
+		RefreshOrttKeyRing(dep.DB)
 		secured.GET("/inbounds", ListInboundsHandler(dep.DB))
+		secured.POST("/inbounds", CreateInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
 		secured.POST("/inbounds/:id/toggle", ToggleInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
 		secured.PUT("/inbounds/:id/rename", RenameInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
 		secured.DELETE("/inbounds/:id", DeleteInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
 		secured.GET("/inbounds/:id/links", InboundLinksHandler(dep.DB))
+		secured.POST("/inbounds/:id/ortt/rotate", OrttRotateHandler(dep.DB, dep.ConfigPath))
+		secured.POST("/inbounds/:id/ortt/toggle", OrttToggleHandler(dep.DB, dep.ConfigPath))
 	}
 	secured.POST("/singbox/compile", func(c *gin.Context) {
 		var ui singbox.UIData
@@ -84,21 +88,34 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		if err := dep.Manager.Restart(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "config": cfg})
-			return
+		if dep.Manager != nil {
+			if err := dep.Manager.Restart(); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "config": cfg})
+				return
+			}
 		}
 		// Persist inbounds to DB. Compile is a full desired-state operation: remove stale
 		// DB rows that are no longer present in the generated config (for example, rename
 		// from external managers such as sui-sub/SBUI panel management).
 		if dep.DB != nil {
+			uiNodeByTag := make(map[string]map[string]interface{}, len(ui.Nodes))
+			for _, n := range ui.Nodes {
+				if n.Data == nil {
+					continue
+				}
+				if tag, _ := n.Data["tag"].(string); tag != "" {
+					uiNodeByTag[tag] = n.Data
+				}
+			}
 			currentTags := map[string]bool{}
 			for _, ib := range cfg.Inbounds {
 				currentTags[ib.Tag] = true
 			}
 			var existing []models.Inbound
+			existingByTag := map[string]models.Inbound{}
 			if err := dep.DB.Find(&existing).Error; err == nil {
 				for _, old := range existing {
+					existingByTag[old.Tag] = old
 					if !currentTags[old.Tag] {
 						dep.DB.Delete(&old)
 						dep.DB.Where("tag = ?", old.Tag).Delete(&models.Outbound{})
@@ -106,20 +123,32 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 				}
 			}
 			for _, ib := range cfg.Inbounds {
-				dep.DB.Where("tag = ?", ib.Tag).Delete(&models.Inbound{})
 				payload := map[string]interface{}{}
+				uiData := uiNodeByTag[ib.Tag]
+				if oldRow, ok := existingByTag[ib.Tag]; ok {
+					var prevPayload map[string]interface{}
+					if err := json.Unmarshal([]byte(oldRow.Payload), &prevPayload); err == nil {
+						for _, k := range []string{"ortt_id", "ortt_key_id", "ortt_secret", "ortt_port", "ortt_enabled", "public_key", "short_id", "sni", "obfs_password"} {
+							if v, exists := prevPayload[k]; exists {
+								payload[k] = v
+							}
+						}
+					}
+				}
+				for _, k := range []string{"ortt_id", "ortt_key_id", "ortt_secret", "ortt_port", "ortt_enabled", "public_key", "short_id", "sni", "obfs_password"} {
+					if uiData != nil {
+						if v, exists := uiData[k]; exists {
+							payload[k] = v
+						}
+					}
+				}
 				// vmess_security is a link-only field: the compiled server
 				// config must not carry it (sing-box rejects an unknown
 				// "security" field in vmess users), so copy it from the
 				// submitted UI node data instead.
-				if ib.Type == "vmess" {
-					for _, n := range ui.Nodes {
-						if tag, _ := n.Data["tag"].(string); tag == ib.Tag {
-							if v, ok := n.Data["vmess_security"].(string); ok && v != "" {
-								payload["vmess_security"] = v
-							}
-							break
-						}
+				if ib.Type == "vmess" && uiData != nil {
+					if v, ok := uiData["vmess_security"].(string); ok && v != "" {
+						payload["vmess_security"] = v
 					}
 				}
 				if ib.TLS != nil {
@@ -224,17 +253,39 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 				if len(ib.PaddingScheme) > 0 {
 					payload["padding_scheme"] = ib.PaddingScheme
 				}
+				var existingID uint
+				if oldRow, ok := existingByTag[ib.Tag]; ok {
+					existingID = oldRow.ID
+				}
+				ensurePayloadOrttIdentity(dep.DB, payload, existingID)
 				payloadBytes, _ := json.Marshal(payload)
-				dep.DB.Create(&models.Inbound{
-					Tag:     ib.Tag,
-					Type:    ib.Type,
-					Port:    ib.ListenPort,
-					Enabled: true,
-					Payload: string(payloadBytes),
-				})
+				if existingID != 0 {
+					dep.DB.Model(&models.Inbound{}).Where("id = ?", existingID).Updates(map[string]interface{}{
+						"type":    ib.Type,
+						"port":    ib.ListenPort,
+						"enabled": true,
+						"payload": string(payloadBytes),
+					})
+				} else {
+					dep.DB.Create(&models.Inbound{
+						Tag:     ib.Tag,
+						Type:    ib.Type,
+						Port:    ib.ListenPort,
+						Enabled: true,
+						Payload: string(payloadBytes),
+					})
+				}
 			}
+			_ = syncClientMetaFromDB(dep.DB, dep.ConfigPath)
+			RefreshOrttKeyRing(dep.DB)
+		} else {
+			_ = writeClientMeta(dep.ConfigPath, ui)
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "running": dep.Manager.Status(), "config": cfg})
+		running := false
+		if dep.Manager != nil {
+			running = dep.Manager.Status()
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "running": running, "config": cfg})
 	})
 	secured.GET("/system/singbox/version", SingboxVersionHandler)
 	secured.POST("/system/singbox/switch", SingboxSwitchWithManagerHandler(dep.Manager))

@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,6 +14,18 @@ import (
 	"s-matrix/core/singbox"
 	"s-matrix/models"
 )
+
+func testStubManagerBin(t *testing.T, dir string) string {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return "/bin/true"
+	}
+	stub := filepath.Join(dir, "true.cmd")
+	if err := os.WriteFile(stub, []byte("@exit /b 0\r\n"), 0644); err != nil {
+		t.Fatalf("write stub bin: %v", err)
+	}
+	return stub
+}
 
 func startTestListener(t *testing.T) string {
 	t.Helper()
@@ -50,12 +63,17 @@ func TestRebuildFromDBKeepsEveryEnabledInbound(t *testing.T) {
 	}
 	// The real manager wants a runnable sing-box; config compilation is what
 	// this test guards, so a stub binary is enough and restart errors are fine.
-	manager := singbox.NewSingboxManager("/bin/true", configPath, filepath.Join(dir, "singbox.log"))
+	manager := singbox.NewSingboxManager(testStubManagerBin(t, dir), configPath, filepath.Join(dir, "singbox.log"))
 
 	db, err := openTestDB(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("db: %v", err)
 	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	seed := []struct {
 		tag     string
 		typ     string
@@ -131,11 +149,16 @@ func openTestDB(path string) (*gorm.DB, error) {
 func TestRebuildFromDBEmptyOrttRoute(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	manager := singbox.NewSingboxManager("/bin/true", configPath, filepath.Join(dir, "singbox.log"))
+	manager := singbox.NewSingboxManager(testStubManagerBin(t, dir), configPath, filepath.Join(dir, "singbox.log"))
 	db, err := openTestDB(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("db: %v", err)
 	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	// No inbounds seeded: the empty-DB path.
 	cases := []struct {
 		name      string
@@ -179,7 +202,7 @@ func TestRebuildFromDBEmptyOrttRoute(t *testing.T) {
 func TestRebuildFromDBSyncsPortAndRenameClientMeta(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")
-	manager := singbox.NewSingboxManager("/bin/true", configPath, filepath.Join(dir, "singbox.log"))
+	manager := singbox.NewSingboxManager(testStubManagerBin(t, dir), configPath, filepath.Join(dir, "singbox.log"))
 
 	if _, _, _, err := singbox.EnsureSelfSignedPair(dir, "sync", "www.bing.com", nil, []string{"www.bing.com"}); err != nil {
 		t.Fatalf("cert: %v", err)
@@ -188,6 +211,11 @@ func TestRebuildFromDBSyncsPortAndRenameClientMeta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db: %v", err)
 	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	// Reserved port 19088 forces compiler to reallocate a free port; DB must stay in sync.
 	payload, _ := json.Marshal(map[string]interface{}{
 		"password": "pw-sync", "server_name": "www.bing.com",

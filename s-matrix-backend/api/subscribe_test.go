@@ -13,7 +13,7 @@ import (
 func TestBuildShareLinks(t *testing.T) {
 	path := "test-config-sub.json"
 	defer os.Remove(path)
-	if err := os.WriteFile(path, []byte(`{"inbounds":[{"type":"vless","tag":"reality","listen_port":443,"users":[{"uuid":"00000000-0000-0000-0000-000000000000"}],"tls":{"server_name":"www.cloudflare.com","reality":{"public_key":"PUB"}}},{"type":"hysteria2","tag":"hy2","listen_port":44300,"users":[{"password":"pw"}]}]}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"inbounds":[{"type":"vless","tag":"reality","listen_port":443,"users":[{"uuid":"00000000-0000-0000-0000-000000000000"}],"tls":{"server_name":"www.apple.com","reality":{"public_key":"PUB"}}},{"type":"hysteria2","tag":"hy2","listen_port":44300,"users":[{"password":"pw"}]}]}`), 0644); err != nil {
 		t.Fatal(err)
 	}
 	links, err := BuildShareLinks(path, "example.com")
@@ -70,5 +70,25 @@ func TestBuildLinkFromRecordVMessCarriesCipher(t *testing.T) {
 	decoded := decodeVMessLink(t, buildLinkFromRecord(ib, "127.0.0.1"))
 	if decoded["scy"] != "aes-128-gcm" || decoded["net"] != "ws" || decoded["path"] != "/chat" || decoded["host"] != "www.bing.com" || decoded["tls"] != "tls" || decoded["sni"] != "www.bing.com" {
 		t.Fatalf("bad vmess json: %+v", decoded)
+	}
+}
+
+func TestRealitySNIPoolExcludesCloudflare(t *testing.T) {
+	if defaultRealityDest == "" || strings.Contains(strings.ToLower(defaultRealityDest), "cloudflare") {
+		t.Fatalf("defaultRealityDest must not use cloudflare: %q", defaultRealityDest)
+	}
+	link := buildLinkFromRecord(models.Inbound{
+		Tag: "reality-default", Type: "vless", Port: 443,
+		Payload: `{"uuid":"00000000-0000-0000-0000-000000000000","public_key":"PUB","short_id":"abcd1234"}`,
+	}, "127.0.0.1")
+	if strings.Contains(strings.ToLower(link), "cloudflare") || !strings.Contains(link, "sni=www.apple.com") {
+		t.Fatalf("unexpected default reality SNI in link: %s", link)
+	}
+	appJS, err := os.ReadFile("web/app.js")
+	if err != nil {
+		t.Fatalf("read web/app.js: %v", err)
+	}
+	if strings.Contains(strings.ToLower(string(appJS)), "cloudflare") {
+		t.Fatalf("web/app.js still references cloudflare in SNI pool or defaults")
 	}
 }

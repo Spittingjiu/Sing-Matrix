@@ -211,6 +211,12 @@ func NewShadowsocksInbound(tag string, port int, method string, password string)
 }
 
 func normalizeShadowsocksPassword(method string, password string) string {
+	return NormalizeShadowsocksPassword(method, password)
+}
+
+// NormalizeShadowsocksPassword derives a valid base64 PSK when a 2022-blake3
+// Shadowsocks method is given a human-readable password instead of a raw key.
+func NormalizeShadowsocksPassword(method string, password string) string {
 	// sing-box 2022-blake3 methods require a base64-encoded PSK with an exact
 	// decoded length. If the operator enters a human password, derive a stable
 	// valid PSK instead of writing a config that sing-box rejects with "bad key".
@@ -328,7 +334,7 @@ func BuildTestConfig() Config {
 		Log: &Log{Level: "info", Timestamp: true},
 		DNS: &DNS{Servers: []DNSServer{{Tag: "cloudflare", Address: "https://1.1.1.1/dns-query"}, {Tag: "alidns", Address: "https://dns.alidns.com/dns-query"}}},
 		Inbounds: []Inbound{
-			NewRealityInbound("reality-443", 443, "00000000-0000-0000-0000-000000000000", "CHANGE_ME_PRIVATE_KEY", "CHANGE_ME_PUBLIC_KEY", "0123456789abcdef", "www.cloudflare.com"),
+			NewRealityInbound("reality-443", 443, "00000000-0000-0000-0000-000000000000", "CHANGE_ME_PRIVATE_KEY", "CHANGE_ME_PUBLIC_KEY", "0123456789abcdef", "www.apple.com"),
 			NewHysteria2Inbound("hy2-44300", 44300, "change-me-password", "https://www.bing.com", "", "", ""),
 		},
 		Outbounds: []Outbound{{Type: "direct", Tag: "direct"}, {Type: "block", Tag: "block"}},

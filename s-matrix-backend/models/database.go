@@ -3,7 +3,6 @@ package models
 import (
 	"time"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -51,7 +50,7 @@ type RuleSet struct {
 }
 
 func OpenDatabase(path string) (*gorm.DB, error) {
-	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	db, err := gorm.Open(openSQLiteDialector(path), &gorm.Config{})
 	if err != nil {
 		return nil, err
 	}

@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -47,8 +46,7 @@ func (m *SingboxManager) statusLocked() bool {
 		return false
 	}
 	// Check if process is actually alive
-	err := m.cmd.Process.Signal(syscall.Signal(0))
-	if err != nil {
+	if !isProcessAlive(m.cmd.Process) {
 		// Process is dead, clean up
 		m.cmd = nil
 		return false
@@ -84,7 +82,7 @@ func (m *SingboxManager) Start() error {
 	cmd := exec.Command(m.Bin, "run", "-c", m.ConfigPath)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureDaemonCmd(cmd)
 	if err := cmd.Start(); err != nil {
 		m.writeLog(fmt.Sprintf("start failed: %v", err))
 		return err
@@ -108,13 +106,7 @@ func (m *SingboxManager) stopLocked() {
 	}
 	pid := m.cmd.Process.Pid
 	// Kill entire process group
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
-	time.Sleep(500 * time.Millisecond)
-	// Check if dead
-	if m.cmd.Process.Signal(syscall.Signal(0)) == nil {
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
-		time.Sleep(200 * time.Millisecond)
-	}
+	terminateProcessGroup(m.cmd.Process)
 	m.cmd = nil
 	m.writeLog(fmt.Sprintf("stopped pid=%d", pid))
 	m.killStrayLocked()
@@ -160,7 +152,7 @@ func (m *SingboxManager) startLocked() error {
 	cmd := exec.Command(m.Bin, "run", "-c", m.ConfigPath)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureDaemonCmd(cmd)
 	if err := cmd.Start(); err != nil {
 		m.writeLog(fmt.Sprintf("start failed: %v", err))
 		return err
@@ -193,9 +185,7 @@ func (m *SingboxManager) killStrayLocked() {
 		}
 		p, _ := os.FindProcess(pid)
 		if p != nil {
-			_ = p.Signal(syscall.SIGTERM)
-			time.Sleep(100 * time.Millisecond)
-			_ = p.Signal(syscall.SIGKILL)
+			terminateSingleProcess(p)
 			m.writeLog(fmt.Sprintf("killed stray pid=%d", pid))
 		}
 	}
@@ -231,9 +221,7 @@ func (m *SingboxManager) killConfigPortsLocked() {
 					}
 					p, _ := os.FindProcess(pid)
 					if p != nil {
-						_ = p.Signal(syscall.SIGTERM)
-						time.Sleep(100 * time.Millisecond)
-						_ = p.Signal(syscall.SIGKILL)
+						terminateSingleProcess(p)
 						m.writeLog(fmt.Sprintf("killed port-conflict pid=%d", pid))
 					}
 				}

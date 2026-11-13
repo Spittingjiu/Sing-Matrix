@@ -286,6 +286,9 @@ table.grid tbody tr:hover { background: #fafbfc; }
 .tag.hy { color: var(--ok); background: var(--ok-bg); border-color: var(--ok-line); }
 .tag.vmess { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
 .tag.trojan { color: #6d28d9; background: #f5f3ff; border-color: #ddd6fe; }
+.tag.ortt { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.tag.ortt.on { color: #047857; background: #ecfdf5; border-color: #a7f3d0; }
+.tag.ortt.off { color: var(--faint); background: #f8fafc; border-color: var(--line); }
 
 .state { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; }
 .state.on { color: var(--ok); }

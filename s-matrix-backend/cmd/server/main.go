@@ -63,8 +63,8 @@ func main() {
 	certMgr.StartRenewalLoop()
 
 	// Repair rows written by older versions before the core is touched, so an
-	// old node cannot block startup.
-	api.MigrateLegacyInbounds(db, certDir)
+	// old node cannot block startup, and backfill per-node ORTT v2 identities.
+	api.MigrateLegacyInboundsWithConfig(db, certDir, configPath)
 
 	manager := singbox.NewSingboxManager(singboxBin, configPath, logPath)
 	// A renewed certificate only takes effect after the core re-reads its config.

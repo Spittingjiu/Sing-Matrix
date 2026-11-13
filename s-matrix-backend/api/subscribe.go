@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"gorm.io/gorm"
 	"s-matrix/core/acme"
 	"s-matrix/core/singbox"
 	"s-matrix/models"
@@ -53,41 +54,96 @@ func isAuthorizedSubscription(c *gin.Context, validToken string) bool {
 }
 
 func SubscriptionHandler(configPath string) gin.HandlerFunc {
+	return SubscriptionHandlerWithDB(configPath, nil)
+}
+
+func SubscriptionHandlerWithDB(configPath string, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		creds := loadCreds()
 		if !isAuthorizedSubscription(c, creds.SubscriptionToken) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "invalid subscription token"})
 			return
 		}
-		links, err := BuildShareLinks(configPath, publicHost(c))
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		host := publicHost(c)
+		format := strings.ToLower(strings.TrimSpace(c.Query("format")))
+		rawMode := strings.TrimSpace(c.Query("raw")) == "1" || strings.EqualFold(strings.TrimSpace(c.Query("raw")), "true")
+
+		switch format {
+		case "aero-json", "aerojson", "json":
+			subResp, err := BuildAeroSubV2(db, configPath, host)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, subResp)
 			return
+		case "aero":
+			links, err := BuildAeroLinksWithDB(db, configPath, host)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			joined := strings.Join(links, "\n")
+			if rawMode {
+				c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(joined))
+				return
+			}
+			encoded := base64.StdEncoding.EncodeToString([]byte(joined))
+			c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(encoded))
+			return
+		default:
+			links, err := BuildShareLinksWithDB(db, configPath, host)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			joined := strings.Join(links, "\n")
+			if rawMode {
+				c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(joined))
+				return
+			}
+			encoded := base64.StdEncoding.EncodeToString([]byte(joined))
+			c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(encoded))
 		}
-		encoded := base64.StdEncoding.EncodeToString([]byte(strings.Join(links, "\n")))
-		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(encoded))
 	}
 }
 
 func ShareLinksHandler(configPath string) gin.HandlerFunc {
+	return ShareLinksHandlerWithDB(configPath, nil)
+}
+
+func ShareLinksHandlerWithDB(configPath string, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		links, err := BuildShareLinks(configPath, publicHost(c))
+		host := publicHost(c)
+		links, err := BuildShareLinksWithDB(db, configPath, host)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"links": links, "subscription": subscriptionURL(c)})
+		aeroLinks, err := BuildAeroLinksWithDB(db, configPath, host)
+		if err != nil {
+			aeroLinks = []string{}
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"links":        links,
+			"aero_links":   aeroLinks,
+			"subscription": subscriptionURL(c),
+		})
 	}
 }
 
 func DiscoveryHandler(configPath string) gin.HandlerFunc {
+	return DiscoveryHandlerWithDB(configPath, nil)
+}
+
+func DiscoveryHandlerWithDB(configPath string, db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		creds := loadCreds()
 		if !isAuthorizedSubscription(c, creds.SubscriptionToken) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
-		links, err := BuildShareLinks(configPath, publicHost(c))
+		links, err := BuildShareLinksWithDB(db, configPath, publicHost(c))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -126,91 +182,31 @@ func DiscoveryHandler(configPath string) gin.HandlerFunc {
 				seen[proto] = true
 			}
 		}
+		subURL := subscriptionURL(c)
 		c.JSON(http.StatusOK, gin.H{
-			"ok":             true,
-			"name":           "S-Matrix",
-			"kind":           "sbui",
-			"version":        "s-matrix.sub.v1",
-			"subscription":   subscriptionURL(c),
-			"links_endpoint": fmt.Sprintf("%s://%s/api/v1/singbox/share-links", forwardedScheme(c), c.Request.Host),
-			"node_count":     len(links),
-			"protocols":      types,
+			"ok":                true,
+			"name":              "S-Matrix",
+			"kind":              "sbui",
+			"version":           "s-matrix.sub.v1",
+			"sub_version":       "s-matrix.sub.v2",
+			"capabilities":      []string{"aero-link-v1", "aero-json-v2", "ortt-per-node-v2"},
+			"endpoints": gin.H{
+				"sub":      "/api/v1/sub/:token",
+				"sub_aero": "/api/v1/sub/:token?format=aero",
+				"sub_json": "/api/v1/sub/:token?format=aero-json",
+			},
+			"subscription":      subURL,
+			"subscription_aero": subURL + "?format=aero",
+			"subscription_json": subURL + "?format=aero-json",
+			"links_endpoint":    fmt.Sprintf("%s://%s/api/v1/singbox/share-links", forwardedScheme(c), c.Request.Host),
+			"node_count":        len(links),
+			"protocols":         types,
 		})
 	}
 }
 
 func BuildShareLinks(configPath, host string) ([]string, error) {
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		// A freshly installed panel has no compiled config yet; that is not an
-		// error condition for subscribe/discover callers, just zero nodes.
-		if os.IsNotExist(err) {
-			return []string{}, nil
-		}
-		return nil, err
-	}
-	var cfg runtimeConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-	links := []string{}
-	for _, in := range cfg.Inbounds {
-		typ := strMap(in, "type", "")
-		tag := strMap(in, "tag", "S-Matrix")
-		port := intMap(in, "listen_port", 0)
-		switch typ {
-		case "vless":
-			link := buildVLESSLink(in, host, port, tag, configPath)
-			if link != "" {
-				links = append(links, link)
-			}
-		case "hysteria2":
-			link := buildHY2Link(in, host, port, tag)
-			if link != "" {
-				links = append(links, link)
-			}
-		case "vmess":
-			link := buildVMessLink(in, host, port, tag)
-			if link != "" {
-				links = append(links, link)
-			}
-		case "trojan":
-			link := buildTrojanLink(in, host, port, tag)
-			if link != "" {
-				links = append(links, link)
-			}
-		case "shadowsocks":
-			link := buildSSLink(in, host, port, tag)
-			if link != "" {
-				links = append(links, link)
-			}
-		case "socks":
-			links = append(links, fmt.Sprintf("socks5://%s:%d#%s", host, port, url.QueryEscape(tag)))
-		case "http":
-			links = append(links, fmt.Sprintf("http://%s:%d#%s", host, port, url.QueryEscape(tag)))
-		case "tuic":
-			if link := buildTUICLink(in, host, port, tag); link != "" {
-				links = append(links, link)
-			}
-		case "naive":
-			if link := buildNaiveLink(in, host, port, tag); link != "" {
-				links = append(links, link)
-			}
-		case "shadowtls":
-			if link := buildShadowTLSLink(in, host, port, tag); link != "" {
-				links = append(links, link)
-			}
-		case "hysteria":
-			if link := buildHysteriaLink(in, host, port, tag); link != "" {
-				links = append(links, link)
-			}
-		case "anytls":
-			if link := buildAnyTLSLink(in, host, port, tag); link != "" {
-				links = append(links, link)
-			}
-		}
-	}
-	return links, nil
+	return BuildShareLinksWithDB(nil, configPath, host)
 }
 
 func buildVLESSLink(in map[string]interface{}, host string, port int, tag, configPath string) string {
@@ -231,7 +227,7 @@ func buildVLESSLink(in map[string]interface{}, host string, port int, tag, confi
 	if sid == "" {
 		sid = firstStringValue(reality, "short_id", "")
 	}
-	sni := strMap(tls, "server_name", "www.cloudflare.com")
+	sni := strMap(tls, "server_name", "www.apple.com")
 	q := url.Values{}
 	q.Set("security", "reality")
 	q.Set("encryption", "none")
@@ -280,21 +276,26 @@ func linkInsecure(certPath string) bool {
 }
 
 func buildHY2Link(in map[string]interface{}, host string, port int, tag string) string {
-	password := firstUserValue(in, "password", "change-me")
-	certPath := ""
-	if tlsMap, ok := in["tls"].(map[string]interface{}); ok {
-		certPath = tlsCertPathFromContext(tlsMap)
-	}
-	host = linkHost(host, inboundServerName(in), certPath)
+	return buildHY2LinkWithOptions(in, host, port, tag, "", nil)
+}
+
+func buildHY2LinkWithOptions(in map[string]interface{}, host string, port int, tag, configPath string, dbPayload map[string]interface{}) string {
+	password := firstUserValue(in, "password", strMap(dbPayload, "password", "change-me"))
+	sniRaw, certPath := resolveNodeSNIAndCert(in, configPath, tag, dbPayload)
+	host = linkHost(host, sniRaw, certPath)
 	q := url.Values{}
-	if sni := sniForLink(inboundServerName(in), host); sni != "" {
+	if sni := sniForLink(sniRaw, host); sni != "" {
 		q.Set("sni", sni)
 	}
-	if tlsMap, ok := in["tls"].(map[string]interface{}); ok && linkInsecure(tlsCertPathFromContext(tlsMap)) {
+	_, hasTLS := in["tls"].(map[string]interface{})
+	if (hasTLS || certPath != "") && linkInsecure(certPath) {
 		q.Set("insecure", "1")
 	}
-	if obfs := strMap(in, "obfs", ""); obfs != "" {
-		q.Set("obfs", obfs)
+	if obfsType, obfsPass := extractHY2Obfs(in, dbPayload); obfsType != "" {
+		q.Set("obfs", obfsType)
+		if obfsPass != "" {
+			q.Set("obfs-password", obfsPass)
+		}
 	}
 	link := fmt.Sprintf("hysteria2://%s@%s:%d/", url.QueryEscape(password), host, port)
 	if enc := q.Encode(); enc != "" {
@@ -351,12 +352,22 @@ func buildVMessLink(in map[string]interface{}, host string, port int, tag string
 }
 
 func buildTrojanLink(in map[string]interface{}, host string, port int, tag string) string {
-	password := firstUserValue(in, "password", "change-me")
-	tls, _ := in["tls"].(map[string]interface{})
-	sni := strMap(tls, "server_name", host)
+	return buildTrojanLinkWithOptions(in, host, port, tag, "", nil)
+}
+
+func buildTrojanLinkWithOptions(in map[string]interface{}, host string, port int, tag, configPath string, dbPayload map[string]interface{}) string {
+	password := firstUserValue(in, "password", strMap(dbPayload, "password", "change-me"))
+	sniRaw, certPath := resolveNodeSNIAndCert(in, configPath, tag, dbPayload)
+	host = linkHost(host, sniRaw, certPath)
 	q := url.Values{}
-	q.Set("sni", sni)
-	return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag))
+	if sni := sniForLink(firstNonEmpty(sniRaw, host), host); sni != "" {
+		q.Set("sni", sni)
+	}
+	rawLink := fmt.Sprintf("trojan://%s@%s:%d", url.QueryEscape(password), host, port)
+	if enc := q.Encode(); enc != "" {
+		rawLink += "?" + enc
+	}
+	return rawLink + "#" + url.QueryEscape(tag)
 }
 
 func buildSSLink(in map[string]interface{}, host string, port int, tag string) string {
@@ -397,8 +408,8 @@ func buildHysteriaLink(in map[string]interface{}, host string, port int, tag str
 	password := firstUserValue(in, "auth_str", firstUserValue(in, "password", "change-me"))
 	q := url.Values{}
 	q.Set("insecure", "1")
-	if obfs := strMap(in, "obfs", ""); obfs != "" {
-		q.Set("obfs", obfs)
+	if obfsType, _ := extractHY2Obfs(in); obfsType != "" {
+		q.Set("obfs", obfsType)
 	}
 	return fmt.Sprintf("hysteria://%s@%s:%d?%s#%s", url.QueryEscape(password), host, port, q.Encode(), url.QueryEscape(tag))
 }
@@ -579,7 +590,9 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 	}
 	tag := ib.Tag
 	port := ib.Port
+	meta, _ := extractOrttMetaFromMap(payload)
 
+	var link string
 	switch ib.Type {
 	case "vless":
 		uuid := strMap(payload, "uuid", "00000000-0000-0000-0000-000000000000")
@@ -588,10 +601,7 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 			pubKey = singbox.DeriveRealityPublicKey(strMap(payload, "private_key", ""))
 		}
 		shortID := strMap(payload, "short_id", "")
-		sni := strMap(payload, "server_name", "www.cloudflare.com")
-		if sni == "" {
-			sni = strMap(payload, "sni", "www.cloudflare.com")
-		}
+		sni := firstNonEmpty(strMap(payload, "server_name", ""), strMap(payload, "sni", ""), "www.apple.com")
 		q := url.Values{}
 		q.Set("security", "reality")
 		q.Set("encryption", "none")
@@ -604,25 +614,11 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 		q.Set("fp", "chrome")
 		q.Set("type", "tcp")
 		q.Set("flow", "xtls-rprx-vision")
-		return fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuid, host, port, q.Encode(), url.QueryEscape(tag))
+		link = fmt.Sprintf("vless://%s@%s:%d?%s#%s", uuid, host, port, q.Encode(), url.QueryEscape(tag))
 
 	case "hysteria2":
-		pwd := strMap(payload, "password", "change-me")
-		q := url.Values{}
-		if sni := sniForLink(strMap(payload, "server_name", strMap(payload, "sni", "")), host); sni != "" {
-			q.Set("sni", sni)
-		}
-		if linkInsecure(strMap(payload, "certificate_path", "")) {
-			q.Set("insecure", "1")
-		}
-		if obfs := strMap(payload, "obfs", ""); obfs != "" {
-			q.Set("obfs", obfs)
-		}
-		link := fmt.Sprintf("hysteria2://%s@%s:%d/", url.QueryEscape(pwd), host, port)
-		if enc := q.Encode(); enc != "" {
-			link += "?" + enc
-		}
-		return link + "#" + url.QueryEscape(tag)
+		inMap, dbPayload := inboundRecordToConfigMap(ib)
+		link = buildHY2LinkWithOptions(inMap, host, port, tag, "", dbPayload)
 
 	case "vmess":
 		uuid := strMap(payload, "uuid", "00000000-0000-0000-0000-000000000000")
@@ -664,30 +660,24 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 			}
 		}
 		b, _ := json.Marshal(vmessCfg)
-		return fmt.Sprintf("vmess://%s", base64.StdEncoding.EncodeToString(b))
+		link = fmt.Sprintf("vmess://%s", base64.StdEncoding.EncodeToString(b))
 
 	case "trojan":
-		pwd := strMap(payload, "password", "change-me")
-		sni := strMap(payload, "sni", host)
-		if sni == "" {
-			sni = strMap(payload, "server_name", host)
-		}
-		q := url.Values{}
-		q.Set("sni", sni)
-		return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
+		inMap, dbPayload := inboundRecordToConfigMap(ib)
+		link = buildTrojanLinkWithOptions(inMap, host, port, tag, "", dbPayload)
 
 	case "shadowsocks":
 		method := strMap(payload, "method", "aes-128-gcm")
-		pwd := strMap(payload, "password", "change-me")
+		pwd := singbox.NormalizeShadowsocksPassword(method, strMap(payload, "password", "change-me"))
 		raw := fmt.Sprintf("%s:%s@%s:%d", method, pwd, host, port)
 		b64 := base64.StdEncoding.EncodeToString([]byte(raw))
-		return fmt.Sprintf("ss://%s#%s", b64, url.QueryEscape(tag))
+		link = fmt.Sprintf("ss://%s#%s", b64, url.QueryEscape(tag))
 
 	case "socks":
-		return fmt.Sprintf("socks5://%s:%d#%s", host, port, url.QueryEscape(tag))
+		link = fmt.Sprintf("socks5://%s:%d#%s", host, port, url.QueryEscape(tag))
 
 	case "http":
-		return fmt.Sprintf("http://%s:%d#%s", host, port, url.QueryEscape(tag))
+		link = fmt.Sprintf("http://%s:%d#%s", host, port, url.QueryEscape(tag))
 
 	case "tuic":
 		uuid := strMap(payload, "uuid", "00000000-0000-0000-0000-000000000000")
@@ -696,12 +686,12 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 		q.Set("congestion_control", strMap(payload, "congestion_control", "cubic"))
 		q.Set("sni", host)
 		q.Set("insecure", "1")
-		return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuid, url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
+		link = fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s", uuid, url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
 
 	case "naive":
 		user := strMap(payload, "username", "user")
 		pwd := strMap(payload, "password", "change-me")
-		return fmt.Sprintf("naive+https://%s:%s@%s:%d#%s", url.QueryEscape(user), url.QueryEscape(pwd), host, port, url.QueryEscape(tag))
+		link = fmt.Sprintf("naive+https://%s:%s@%s:%d#%s", url.QueryEscape(user), url.QueryEscape(pwd), host, port, url.QueryEscape(tag))
 
 	case "shadowtls":
 		pwd := strMap(payload, "password", "change-me")
@@ -709,7 +699,7 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 		q := url.Values{}
 		q.Set("version", "3")
 		q.Set("sni", sni)
-		return fmt.Sprintf("shadowtls://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
+		link = fmt.Sprintf("shadowtls://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
 
 	case "hysteria":
 		pwd := strMap(payload, "password", strMap(payload, "auth_str", "change-me"))
@@ -718,24 +708,28 @@ func buildLinkFromRecord(ib models.Inbound, host string) string {
 		if obfs := strMap(payload, "obfs", ""); obfs != "" {
 			q.Set("obfs", obfs)
 		}
-		return fmt.Sprintf("hysteria://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
+		link = fmt.Sprintf("hysteria://%s@%s:%d?%s#%s", url.QueryEscape(pwd), host, port, q.Encode(), url.QueryEscape(tag))
 
 	case "anytls":
 		pwd := strMap(payload, "password", "change-me")
+		sniRaw := strMap(payload, "server_name", strMap(payload, "sni", ""))
+		certPath := strMap(payload, "certificate_path", "")
+		host = linkHost(host, sniRaw, certPath)
 		q := url.Values{}
-		if linkInsecure(strMap(payload, "certificate_path", "")) {
+		if linkInsecure(certPath) {
 			q.Set("insecure", "1")
 		}
-		if sni := sniForLink(strMap(payload, "server_name", strMap(payload, "sni", "")), host); sni != "" {
+		if sni := sniForLink(sniRaw, host); sni != "" {
 			q.Set("sni", sni)
 		}
-		link := fmt.Sprintf("anytls://%s@%s:%d/", url.QueryEscape(pwd), host, port)
+		rawLink := fmt.Sprintf("anytls://%s@%s:%d/", url.QueryEscape(pwd), host, port)
 		if enc := q.Encode(); enc != "" {
-			link += "?" + enc
+			rawLink += "?" + enc
 		}
-		return link + "#" + url.QueryEscape(tag)
+		link = rawLink + "#" + url.QueryEscape(tag)
 
 	default:
-		return fmt.Sprintf("ss://%s@%s:%d#%s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("aes-128-gcm:change-me@%s:%d", host, port))), host, port, url.QueryEscape(tag))
+		link = fmt.Sprintf("ss://%s@%s:%d#%s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("aes-128-gcm:change-me@%s:%d", host, port))), host, port, url.QueryEscape(tag))
 	}
+	return appendOrttQueryToLink(link, meta)
 }

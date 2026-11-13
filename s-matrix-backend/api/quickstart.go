@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -31,10 +30,11 @@ type quickDeps struct {
 	PanelAddr  string
 }
 
-// defaultRealityDest must be a site that speaks TLS 1.3 + HTTP/2 from this host.
+// defaultRealityDest must be a site that speaks TLS 1.3 + HTTP/2 from this host
+// without sitting behind Cloudflare or an edge that fails REALITY handshakes.
 // www.microsoft.com is fronted by an edge that makes REALITY fail the handshake
 // (clients see EOF), so it must not be the default.
-const defaultRealityDest = "www.cloudflare.com"
+const defaultRealityDest = "www.apple.com"
 
 func QuickRealityHandler(dep quickDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -51,8 +51,8 @@ func QuickRealityHandler(dep quickDeps) gin.HandlerFunc {
 		}
 		if dest == "" {
 			// www.microsoft.com is served by an edge that fails REALITY
-			// handshake validation here (clients get EOF). Cloudflare's own
-			// site is TLS 1.3 + H2 clean and is the safest default.
+			// handshake validation here (clients get EOF), and Cloudflare
+			// domains are excluded from the REALITY SNI pool.
 			dest = defaultRealityDest
 		}
 
@@ -292,6 +292,43 @@ func QuickAnyTLSHandler(dep quickDeps) gin.HandlerFunc {
 }
 
 func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string, port int, extra ...gin.H) {
+	// Ensure every inbound node has persistent per-node ORTT v2 identity before
+	// writing .client.json or SQLite so both stores stay identical.
+	for i := range topo.Nodes {
+		n := &topo.Nodes[i]
+		sbType := quickDBType(n.Kind)
+		if sbType == "" {
+			continue
+		}
+		if n.Data == nil {
+			n.Data = map[string]interface{}{}
+		}
+		pTag, _ := n.Data["tag"].(string)
+		var existingID uint
+		if dep.DB != nil && pTag != "" {
+			var prev models.Inbound
+			if err := dep.DB.Where("tag = ?", pTag).First(&prev).Error; err == nil {
+				existingID = prev.ID
+				var prevPayload map[string]interface{}
+				if err := json.Unmarshal([]byte(prev.Payload), &prevPayload); err == nil {
+					for _, k := range []string{"ortt_id", "ortt_key_id", "ortt_secret", "ortt_port", "ortt_enabled"} {
+						if _, ok := n.Data[k]; !ok {
+							if v, exists := prevPayload[k]; exists {
+								n.Data[k] = v
+							}
+						}
+					}
+				}
+			}
+		}
+		meta, _ := ensurePayloadOrttIdentity(dep.DB, n.Data, existingID)
+		n.Data["ortt_id"] = meta.OrttID
+		n.Data["ortt_key_id"] = meta.OrttKeyID
+		n.Data["ortt_secret"] = meta.OrttSecret
+		n.Data["ortt_port"] = meta.OrttPort
+		n.Data["ortt_enabled"] = meta.OrttEnabled
+	}
+
 	_ = writeClientMeta(dep.ConfigPath, topo)
 	// Persist first: the compiler must always run against the full desired
 	// state (every enabled inbound), otherwise creating a second node would
@@ -304,7 +341,7 @@ func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string
 			}
 			pTag, _ := n.Data["tag"].(string)
 			payload := map[string]interface{}{}
-			for _, k := range []string{"private_key", "public_key", "short_id", "uuid", "password", "dest", "server_name", "sni", "certificate_path", "key_path", "masquerade", "padding_scheme", "network", "path", "host", "vmess_security", "security", "service_name", "tls"} {
+			for _, k := range []string{"private_key", "public_key", "short_id", "uuid", "password", "dest", "server_name", "sni", "certificate_path", "key_path", "masquerade", "padding_scheme", "network", "path", "host", "vmess_security", "security", "service_name", "tls", "ortt_id", "ortt_key_id", "ortt_secret", "ortt_port", "ortt_enabled"} {
 				if v, ok := n.Data[k]; ok {
 					payload[k] = v
 				}
@@ -333,11 +370,36 @@ func respondQuick(c *gin.Context, dep quickDeps, topo singbox.UIData, typ string
 			return
 		}
 	}
-	links, _ := BuildShareLinks(dep.ConfigPath, publicHost(c))
-	out := gin.H{"ok": true, "type": typ, "port": port, "nodes": topo.Nodes, "edges": topo.Edges, "links": links, "subscription": subscriptionURL(c), "running": dep.Manager.Status()}
+	host := publicHost(c)
+	links, _ := BuildShareLinksWithDB(dep.DB, dep.ConfigPath, host)
+	aeroLinks, _ := BuildAeroLinksWithDB(dep.DB, dep.ConfigPath, host)
+	out := gin.H{
+		"ok":           true,
+		"type":         typ,
+		"port":         port,
+		"nodes":        topo.Nodes,
+		"edges":        topo.Edges,
+		"links":        links,
+		"aero_links":   aeroLinks,
+		"subscription": subscriptionURL(c),
+		"running":      dep.Manager.Status(),
+	}
 	for _, e := range extra {
 		for k, v := range e {
 			out[k] = v
+		}
+	}
+	if rawLink, ok := out["link"].(string); ok && rawLink != "" && len(topo.Nodes) > 0 {
+		if meta, hasOrtt := extractOrttMetaFromMap(topo.Nodes[0].Data); hasOrtt && meta.OrttEnabled {
+			out["link"] = appendOrttQueryToLink(rawLink, meta)
+		}
+		if domain, _ := out["domain"].(string); domain != "" {
+			if domAero, err := BuildAeroLinksWithDB(dep.DB, dep.ConfigPath, domain); err == nil && len(domAero) > 0 {
+				out["aero_links"] = domAero
+				out["aero_link"] = domAero[0]
+			}
+		} else if len(aeroLinks) > 0 {
+			out["aero_link"] = aeroLinks[0]
 		}
 	}
 	c.JSON(http.StatusOK, out)
@@ -389,14 +451,13 @@ func writeClientMeta(configPath string, topo singbox.UIData) error {
 	// Merge with whatever is already on disk: this file is the only place the
 	// public half of a REALITY key is kept, so overwriting it would silently
 	// degrade every previously created node's share link to pbk=.
-	meta := map[string]map[string]string{}
-	if data, err := os.ReadFile(configPath + ".client.json"); err == nil {
-		var root struct {
-			Inbounds map[string]map[string]string `json:"inbounds"`
-		}
-		if err := json.Unmarshal(data, &root); err == nil && root.Inbounds != nil {
-			meta = root.Inbounds
-		}
+	doc := readClientMetaDoc(configPath)
+	meta := doc.Inbounds
+	if meta == nil {
+		meta = map[string]map[string]string{}
+	}
+	if doc.Ortt == nil {
+		doc.Ortt = map[string]OrttMeta{}
 	}
 	for _, n := range topo.Nodes {
 		tag := ""
@@ -426,18 +487,19 @@ func writeClientMeta(configPath string, topo singbox.UIData) error {
 				}
 			}
 		}
+		if om, ok := extractOrttMetaFromMap(n.Data); ok && (om.OrttID != "" || om.OrttSecret != "") {
+			applyOrttMetaToStringMap(entry, om)
+			doc.Ortt[tag] = om
+		}
 		if len(entry) > 0 {
 			meta[tag] = entry
 		}
 	}
-	if len(meta) == 0 {
+	if len(meta) == 0 && len(doc.Ortt) == 0 {
 		return nil
 	}
-	data, err := json.MarshalIndent(map[string]interface{}{"inbounds": meta}, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(configPath+".client.json", data, 0644)
+	doc.Inbounds = meta
+	return writeClientMetaDoc(configPath, doc)
 }
 
 func generateRealityMaterial(bin string) map[string]string {

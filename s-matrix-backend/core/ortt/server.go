@@ -17,6 +17,22 @@ import (
 	"time"
 )
 
+type keyRingSnapshot struct {
+	rawKeys map[uint16][]byte
+	entries map[uint16]NodeKeyEntry
+}
+
+type nodeStatsCounter struct {
+	orttID         string
+	keyID          atomic.Uint32
+	inboundTag     atomic.Value // string
+	lastWakeUnix   atomic.Int64
+	wakeCount      atomic.Int64
+	heartbeatCount atomic.Int64
+	pingCount      atomic.Int64
+	lastSeenUnix   atomic.Int64
+}
+
 type Server struct {
 	cfg         *Config
 	dnsMgr      *DNSManager
@@ -25,15 +41,34 @@ type Server struct {
 	limiter     *RateLimiter
 	replayCache *ReplayCache
 	sessions    sync.Map // string -> *ClientSession
-	udpConn     net.PacketConn
-	httpServer  *http.Server
+	keyState    atomic.Pointer[keyRingSnapshot]
+	nodeStatsMu sync.RWMutex
+	nodeStats   map[string]*nodeStatsCounter
+	udpConn      net.PacketConn
+	listenPacket func(network, address string) (net.PacketConn, error)
+	httpServer   *http.Server
 	prewarming  atomic.Bool
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
 }
 
-var globalServer *Server
+var (
+	globalServerMu sync.RWMutex
+	globalServer   *Server
+)
+
+func GlobalServer() *Server {
+	globalServerMu.RLock()
+	defer globalServerMu.RUnlock()
+	return globalServer
+}
+
+func SetGlobalServer(s *Server) {
+	globalServerMu.Lock()
+	defer globalServerMu.Unlock()
+	globalServer = s
+}
 
 func NewServer(cfg *Config) *Server {
 	if cfg == nil {
@@ -47,16 +82,229 @@ func NewServer(cfg *Config) *Server {
 	limiter := NewRateLimiterWithBurst(50.0, 5.0, 30.0) // 50 global rps, 5 rps per IP, 30 burst
 	replayCache := NewReplayCache()
 
-	return &Server{
+	srv := &Server{
 		cfg:         cfg,
 		dnsMgr:      dnsMgr,
 		pool:        pool,
 		forwarder:   forwarder,
 		limiter:     limiter,
-		replayCache: replayCache,
-		ctx:         ctx,
-		cancel:      cancel,
+		replayCache:  replayCache,
+		nodeStats:    make(map[string]*nodeStatsCounter),
+		listenPacket: net.ListenPacket,
+		ctx:          ctx,
+		cancel:       cancel,
 	}
+	srv.initKeyRingFromConfig()
+	return srv
+}
+
+func (s *Server) initKeyRingFromConfig() {
+	snap := &keyRingSnapshot{
+		rawKeys: make(map[uint16][]byte),
+		entries: make(map[uint16]NodeKeyEntry),
+	}
+	if len(s.cfg.SecretKey) > 0 {
+		sec := append([]byte(nil), s.cfg.SecretKey...)
+		snap.rawKeys[DefaultKeyID] = sec
+		snap.entries[DefaultKeyID] = NodeKeyEntry{
+			OrttID: "ortt_global",
+			KeyID:  DefaultKeyID,
+			Secret: sec,
+		}
+	}
+	for k, v := range s.cfg.KeyRing {
+		if len(v) == 0 {
+			continue
+		}
+		sec := append([]byte(nil), v...)
+		snap.rawKeys[k] = sec
+		if k <= 1 {
+			snap.entries[k] = NodeKeyEntry{OrttID: "ortt_global", KeyID: k, Secret: sec}
+		} else {
+			snap.entries[k] = NodeKeyEntry{OrttID: fmt.Sprintf("ortt_key_%d", k), KeyID: k, Secret: sec}
+		}
+	}
+	s.keyState.Store(snap)
+}
+
+// ReplaceNodeKeys atomically swaps per-node KeyID (>= 2) bindings while preserving KeyID 1 global ORTT_SECRET.
+func (s *Server) ReplaceNodeKeys(entries []NodeKeyEntry) {
+	if s == nil {
+		return
+	}
+	snap := &keyRingSnapshot{
+		rawKeys: make(map[uint16][]byte),
+		entries: make(map[uint16]NodeKeyEntry),
+	}
+	if len(s.cfg.SecretKey) > 0 {
+		sec := append([]byte(nil), s.cfg.SecretKey...)
+		snap.rawKeys[DefaultKeyID] = sec
+		snap.entries[DefaultKeyID] = NodeKeyEntry{
+			OrttID: "ortt_global",
+			KeyID:  DefaultKeyID,
+			Secret: sec,
+		}
+	} else if s.cfg.KeyRing != nil && len(s.cfg.KeyRing[DefaultKeyID]) > 0 {
+		sec := append([]byte(nil), s.cfg.KeyRing[DefaultKeyID]...)
+		snap.rawKeys[DefaultKeyID] = sec
+		snap.entries[DefaultKeyID] = NodeKeyEntry{
+			OrttID: "ortt_global",
+			KeyID:  DefaultKeyID,
+			Secret: sec,
+		}
+	}
+
+	activeOrttIDs := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if entry.KeyID < 2 || len(entry.Secret) == 0 {
+			continue
+		}
+		sec := append([]byte(nil), entry.Secret...)
+		cp := NodeKeyEntry{
+			OrttID:     entry.OrttID,
+			KeyID:      entry.KeyID,
+			InboundTag: entry.InboundTag,
+			Secret:     sec,
+		}
+		snap.rawKeys[entry.KeyID] = sec
+		snap.entries[entry.KeyID] = cp
+		if cp.OrttID != "" {
+			activeOrttIDs[cp.OrttID] = true
+			s.ensureNodeStatsCounter(cp.OrttID, cp.KeyID, cp.InboundTag)
+		}
+	}
+	s.keyState.Store(snap)
+
+	// Prune stats entries that have zero recorded activity and are no longer active.
+	s.nodeStatsMu.Lock()
+	for id, c := range s.nodeStats {
+		if id == "ortt_global" || activeOrttIDs[id] {
+			continue
+		}
+		if c.wakeCount.Load() == 0 && c.heartbeatCount.Load() == 0 && c.pingCount.Load() == 0 {
+			delete(s.nodeStats, id)
+		}
+	}
+	s.nodeStatsMu.Unlock()
+}
+
+// SetNodeKey adds or updates a single node KeyID (>= 2) without interrupting other keys.
+func (s *Server) SetNodeKey(entry NodeKeyEntry) {
+	if s == nil || entry.KeyID < 2 || len(entry.Secret) == 0 {
+		return
+	}
+	cur := s.keyState.Load()
+	next := &keyRingSnapshot{
+		rawKeys: make(map[uint16][]byte),
+		entries: make(map[uint16]NodeKeyEntry),
+	}
+	if cur != nil {
+		for k, v := range cur.rawKeys {
+			next.rawKeys[k] = v
+		}
+		for k, v := range cur.entries {
+			next.entries[k] = v
+		}
+	}
+	sec := append([]byte(nil), entry.Secret...)
+	cp := NodeKeyEntry{
+		OrttID:     entry.OrttID,
+		KeyID:      entry.KeyID,
+		InboundTag: entry.InboundTag,
+		Secret:     sec,
+	}
+	next.rawKeys[entry.KeyID] = sec
+	next.entries[entry.KeyID] = cp
+	if cp.OrttID != "" {
+		s.ensureNodeStatsCounter(cp.OrttID, cp.KeyID, cp.InboundTag)
+	}
+	s.keyState.Store(next)
+}
+
+// RemoveNodeKey removes a single KeyID (>= 2) immediately from the live KeyRing.
+func (s *Server) RemoveNodeKey(keyID uint16) {
+	if s == nil || keyID < 2 {
+		return
+	}
+	cur := s.keyState.Load()
+	if cur == nil {
+		return
+	}
+	next := &keyRingSnapshot{
+		rawKeys: make(map[uint16][]byte),
+		entries: make(map[uint16]NodeKeyEntry),
+	}
+	for k, v := range cur.rawKeys {
+		if k != keyID {
+			next.rawKeys[k] = v
+		}
+	}
+	for k, v := range cur.entries {
+		if k != keyID {
+			next.entries[k] = v
+		}
+	}
+	s.keyState.Store(next)
+}
+
+func ReplaceNodeKeys(entries []NodeKeyEntry) {
+	if gs := GlobalServer(); gs != nil {
+		gs.ReplaceNodeKeys(entries)
+	}
+}
+
+// KeyRingCopy returns a shallow clone of the active KeyID -> secret map.
+func (s *Server) KeyRingCopy() map[uint16][]byte {
+	if s == nil {
+		return nil
+	}
+	snap := s.keyState.Load()
+	if snap == nil {
+		return nil
+	}
+	out := make(map[uint16][]byte, len(snap.rawKeys))
+	for k, v := range snap.rawKeys {
+		out[k] = append([]byte(nil), v...)
+	}
+	return out
+}
+
+func (s *Server) ensureNodeStatsCounter(orttID string, keyID uint16, tag string) *nodeStatsCounter {
+	if orttID == "" {
+		return nil
+	}
+	s.nodeStatsMu.RLock()
+	c, ok := s.nodeStats[orttID]
+	s.nodeStatsMu.RUnlock()
+	if ok {
+		if keyID > 0 {
+			c.keyID.Store(uint32(keyID))
+		}
+		if tag != "" {
+			c.inboundTag.Store(tag)
+		}
+		return c
+	}
+	s.nodeStatsMu.Lock()
+	defer s.nodeStatsMu.Unlock()
+	if c, ok = s.nodeStats[orttID]; ok {
+		if keyID > 0 {
+			c.keyID.Store(uint32(keyID))
+		}
+		if tag != "" {
+			c.inboundTag.Store(tag)
+		}
+		return c
+	}
+	c = &nodeStatsCounter{orttID: orttID}
+	if keyID > 0 {
+		c.keyID.Store(uint32(keyID))
+	}
+	if tag != "" {
+		c.inboundTag.Store(tag)
+	}
+	s.nodeStats[orttID] = c
+	return c
 }
 
 // envFilePath returns the data-dir env file the engine reads its secret from.
@@ -151,6 +399,18 @@ func EffectiveEnabled() bool {
 	return ForwarderListening()
 }
 
+// ResolveControlPort returns the configured UDP/stats control port (default 39999).
+func ResolveControlPort() int {
+	portStr := strings.TrimSpace(os.Getenv("ORTT_PORT"))
+	if portStr == "" {
+		portStr = strings.TrimSpace(os.Getenv("SMATRIX_ACCEL_PORT"))
+	}
+	if port, err := strconv.Atoi(portStr); err == nil && port > 0 && port <= 65535 {
+		return port
+	}
+	return DefaultConfig().ControlPort
+}
+
 // Start launches the ORTT server if explicitly enabled (default disabled)
 func Start(port int) error {
 	if accelExplicitlyDisabled() {
@@ -171,14 +431,7 @@ func Start(port int) error {
 	}
 
 	if port <= 0 {
-		portStr := os.Getenv("ORTT_PORT")
-		if portStr == "" {
-			portStr = os.Getenv("SMATRIX_ACCEL_PORT")
-		}
-		port, _ = strconv.Atoi(portStr)
-		if port <= 0 {
-			port = 39999
-		}
+		port = ResolveControlPort()
 	}
 
 	cfg := DefaultConfig()
@@ -193,11 +446,12 @@ func Start(port int) error {
 	cfg.SecretKey = []byte(secret)
 	cfg.KeyRing[1] = []byte(secret)
 
-	globalServer = NewServer(cfg)
-	if err := globalServer.Run(); err != nil {
+	srv := NewServer(cfg)
+	if err := srv.Run(); err != nil {
 		log.Printf("[ORTT] 启动失败: %v", err)
 		return err
 	}
+	SetGlobalServer(srv)
 	return nil
 }
 
@@ -209,7 +463,11 @@ func (s *Server) Run() error {
 
 	// 2. Start Authenticated UDP Control Listener
 	addr := fmt.Sprintf("0.0.0.0:%d", s.cfg.ControlPort)
-	conn, err := net.ListenPacket("udp", addr)
+	listenFn := s.listenPacket
+	if listenFn == nil {
+		listenFn = net.ListenPacket
+	}
+	conn, err := listenFn("udp", addr)
 	if err != nil {
 		s.forwarder.Close()
 		return fmt.Errorf("ortt control listener bind %s failed: %w", addr, err)
@@ -223,7 +481,7 @@ func (s *Server) Run() error {
 	httpMux := http.NewServeMux()
 	statsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(GetStats())
+		_ = json.NewEncoder(w).Encode(s.GetStats())
 	})
 	httpMux.Handle("/api/v1/ortt/stats", statsHandler)
 	httpMux.Handle("/ortt/stats", statsHandler)
@@ -233,9 +491,13 @@ func (s *Server) Run() error {
 		Handler: httpMux,
 	}
 	s.httpServer = httpServer
-	go func() {
-		_ = httpServer.ListenAndServe()
-	}()
+	if httpLn, lnErr := net.Listen("tcp", httpServer.Addr); lnErr == nil {
+		go func() {
+			_ = httpServer.Serve(httpLn)
+		}()
+	} else {
+		log.Printf("[ORTT] ⚠️ HTTP stats listener bind %s failed: %v", httpServer.Addr, lnErr)
+	}
 
 	// Background session cleaner & pre-warmer
 	s.wg.Add(2)
@@ -260,6 +522,9 @@ func (s *Server) udpListenLoop() {
 			case <-s.ctx.Done():
 				return
 			default:
+				if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+					log.Printf("[ORTT] UDP ReadFrom error: %v", err)
+				}
 				continue
 			}
 		}
@@ -273,14 +538,19 @@ func (s *Server) udpListenLoop() {
 			continue
 		}
 
-		// Cryptographic authentication & replay check with multi-key support
-		cmd, _, _, err := VerifyPacketWithKeys(s.cfg.KeyRing, s.cfg.SecretKey, buf[:n], s.replayCache)
+		// Cryptographic authentication & replay check with strict per-KeyID isolation
+		snap := s.keyState.Load()
+		var keyMap map[uint16][]byte
+		if snap != nil {
+			keyMap = snap.rawKeys
+		}
+		cmd, _, keyID, matchedSecret, err := VerifyPacketWithKeys(keyMap, s.cfg.SecretKey, buf[:n], s.replayCache)
 		if err != nil {
 			atomic.AddInt64(&GlobalStats.PacketsDropped, 1)
 			continue
 		}
 
-		s.handleCommand(cmd, remoteAddr, buf[:n])
+		s.handleCommand(cmd, keyID, matchedSecret, remoteAddr, buf[:n])
 	}
 }
 
@@ -345,6 +615,9 @@ func isProxyConfiguredAndRunning() bool {
 		"/usr/local/etc/xray/config.json",
 		"/etc/sui-xray/config.json",
 	}
+	if envCfg := strings.TrimSpace(os.Getenv("SMATRIX_CONFIG")); envCfg != "" {
+		cfgPaths = append([]string{envCfg}, cfgPaths...)
+	}
 
 	for _, p := range cfgPaths {
 		data, err := os.ReadFile(p)
@@ -359,7 +632,7 @@ func isProxyConfiguredAndRunning() bool {
 	return false
 }
 
-func (s *Server) buildPongPacket(nonceBytes []byte) []byte {
+func (s *Server) buildPongPacket(nonceBytes []byte, signingSecret []byte) []byte {
 	pong := make([]byte, 48)
 	copy(pong[0:4], Magic)       // "ORTT"
 	pong[4] = ProtocolVersion    // 0x02
@@ -379,14 +652,51 @@ func (s *Server) buildPongPacket(nonceBytes []byte) []byte {
 	pong[24] = s.checkDataPlaneStatus()
 	// pong[25:32] are reserved zero bytes
 
-	sig := ComputeHMAC(s.cfg.SecretKey, pong[:32])
+	if len(signingSecret) == 0 {
+		signingSecret = s.cfg.SecretKey
+	}
+	sig := ComputeHMAC(signingSecret, pong[:32])
 	copy(pong[32:48], sig)
 	return pong
 }
 
-func (s *Server) handleCommand(cmd byte, remoteAddr net.Addr, rawReq []byte) {
+func (s *Server) recordNodeCommand(cmd byte, keyID uint16, now time.Time) {
+	var orttID, tag string
+	if snap := s.keyState.Load(); snap != nil {
+		if entry, ok := snap.entries[keyID]; ok {
+			orttID = entry.OrttID
+			tag = entry.InboundTag
+		}
+	}
+	if orttID == "" {
+		if keyID <= 1 {
+			orttID = "ortt_global"
+		} else {
+			orttID = fmt.Sprintf("ortt_key_%d", keyID)
+		}
+	}
+	c := s.ensureNodeStatsCounter(orttID, keyID, tag)
+	if c == nil {
+		return
+	}
+	nowUnix := now.Unix()
+	c.lastSeenUnix.Store(nowUnix)
+	switch cmd {
+	case CmdWakeup:
+		c.wakeCount.Add(1)
+		c.lastWakeUnix.Store(nowUnix)
+	case CmdHeartbeat:
+		c.heartbeatCount.Add(1)
+	case CmdPing:
+		c.pingCount.Add(1)
+	}
+}
+
+func (s *Server) handleCommand(cmd byte, keyID uint16, matchedSecret []byte, remoteAddr net.Addr, rawReq []byte) {
 	clientAddr := remoteAddr.String()
 	now := time.Now()
+	s.recordNodeCommand(cmd, keyID, now)
+
 	val, loaded := s.sessions.Load(clientAddr)
 	var sess *ClientSession
 	if loaded {
@@ -399,12 +709,12 @@ func (s *Server) handleCommand(cmd byte, remoteAddr net.Addr, rawReq []byte) {
 	switch cmd {
 	case CmdWakeup:
 		if sess.TouchWakeup(now) || atomic.LoadInt64(&GlobalStats.ActiveWarmConns) < 20 {
-			log.Printf("[ORTT] ⚡ 客户端 [%s] 鉴权成功激活，异步预热核心目标连接池", clientAddr)
+			log.Printf("[ORTT] ⚡ 客户端 [%s] (KeyID=%d) 鉴权成功激活，异步预热核心目标连接池", clientAddr, keyID)
 			s.triggerAsyncPrewarm()
 		}
 		if len(rawReq) >= 14 && s.udpConn != nil {
 			nonce := rawReq[10:14]
-			pong := s.buildPongPacket(nonce)
+			pong := s.buildPongPacket(nonce, matchedSecret)
 			_, _ = s.udpConn.WriteTo(pong, remoteAddr)
 		}
 
@@ -415,7 +725,7 @@ func (s *Server) handleCommand(cmd byte, remoteAddr net.Addr, rawReq []byte) {
 		}
 
 	case CmdSleep:
-		log.Printf("[ORTT] 💤 客户端 [%s] 正常休眠", clientAddr)
+		log.Printf("[ORTT] 💤 客户端 [%s] (KeyID=%d) 正常休眠", clientAddr, keyID)
 		s.sessions.Delete(clientAddr)
 
 	case CmdPing:
@@ -425,7 +735,7 @@ func (s *Server) handleCommand(cmd byte, remoteAddr net.Addr, rawReq []byte) {
 		}
 		if len(rawReq) >= 14 && s.udpConn != nil {
 			nonce := rawReq[10:14]
-			pong := s.buildPongPacket(nonce)
+			pong := s.buildPongPacket(nonce, matchedSecret)
 			_, _ = s.udpConn.WriteTo(pong, remoteAddr)
 		}
 	}
@@ -504,8 +814,81 @@ func (s *Server) Close() {
 	s.wg.Wait()
 }
 
+func snapshotNodeCounter(c *nodeStatsCounter) NodeOrttStats {
+	tag, _ := c.inboundTag.Load().(string)
+	return NodeOrttStats{
+		OrttID:         c.orttID,
+		KeyID:          uint16(c.keyID.Load()),
+		InboundTag:     tag,
+		LastWakeUnix:   c.lastWakeUnix.Load(),
+		WakeCount:      c.wakeCount.Load(),
+		HeartbeatCount: c.heartbeatCount.Load(),
+		PingCount:      c.pingCount.Load(),
+		LastSeenUnix:   c.lastSeenUnix.Load(),
+	}
+}
+
+func (s *Server) GetAllNodeStats() map[string]NodeOrttStats {
+	if s == nil {
+		return nil
+	}
+	s.nodeStatsMu.RLock()
+	defer s.nodeStatsMu.RUnlock()
+	if len(s.nodeStats) == 0 {
+		return nil
+	}
+	out := make(map[string]NodeOrttStats, len(s.nodeStats))
+	for k, c := range s.nodeStats {
+		out[k] = snapshotNodeCounter(c)
+	}
+	return out
+}
+
+func (s *Server) GetNodeStats(orttID string) (NodeOrttStats, bool) {
+	if s == nil || orttID == "" {
+		return NodeOrttStats{}, false
+	}
+	s.nodeStatsMu.RLock()
+	c, ok := s.nodeStats[orttID]
+	s.nodeStatsMu.RUnlock()
+	if !ok {
+		return NodeOrttStats{}, false
+	}
+	return snapshotNodeCounter(c), true
+}
+
+func (s *Server) GetStats() Stats {
+	st := loadAtomicGlobalStats()
+	if s != nil {
+		st.Nodes = s.GetAllNodeStats()
+	}
+	return st
+}
+
+func loadAtomicGlobalStats() Stats {
+	return Stats{
+		PoolHits:        atomic.LoadInt64(&GlobalStats.PoolHits),
+		PoolMisses:      atomic.LoadInt64(&GlobalStats.PoolMisses),
+		PoolReplays:     atomic.LoadInt64(&GlobalStats.PoolReplays),
+		ActiveWarmConns: atomic.LoadInt64(&GlobalStats.ActiveWarmConns),
+		PacketsReceived: atomic.LoadInt64(&GlobalStats.PacketsReceived),
+		PacketsDropped:  atomic.LoadInt64(&GlobalStats.PacketsDropped),
+		ActiveSessions:  atomic.LoadInt64(&GlobalStats.ActiveSessions),
+		UptimeSeconds:   int64(time.Since(startTime).Seconds()),
+	}
+}
+
+func GetNodeStats(orttID string) (NodeOrttStats, bool) {
+	if gs := GlobalServer(); gs != nil {
+		return gs.GetNodeStats(orttID)
+	}
+	return NodeOrttStats{}, false
+}
+
 func GetStats() Stats {
-	st := GlobalStats
-	st.UptimeSeconds = int64(time.Since(startTime).Seconds())
+	st := loadAtomicGlobalStats()
+	if gs := GlobalServer(); gs != nil {
+		st.Nodes = gs.GetAllNodeStats()
+	}
 	return st
 }

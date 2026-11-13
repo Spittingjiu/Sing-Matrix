@@ -60,23 +60,28 @@ func VerifyPacket(secret []byte, raw []byte, cache *ReplayCache) (byte, uint32, 
 	if len(secret) > 0 {
 		keyRing[1] = secret
 	}
-	return VerifyPacketWithKeys(keyRing, secret, raw, cache)
+	cmd, ts, keyID, _, err := VerifyPacketWithKeys(keyRing, secret, raw, cache)
+	return cmd, ts, keyID, err
 }
 
-// VerifyPacketWithKeys authenticates raw packet against key ring, primary secret, or fallback
-func VerifyPacketWithKeys(keyRing map[uint16][]byte, defaultSecret []byte, raw []byte, cache *ReplayCache) (byte, uint32, uint16, error) {
+// VerifyPacketWithKeys authenticates raw packet against keyRing and returns the matched secret bytes.
+// Security invariant:
+//   - KeyID >= 2: STRICT per-node isolation — ONLY keyRing[keyID] is consulted; NEVER falls back to
+//     defaultSecret or other keys in keyRing so rotated/disabled/deleted nodes fail immediately.
+//   - KeyID <= 1: legacy global slot — checks keyRing[keyID] and falls back to defaultSecret / keyRing[1].
+func VerifyPacketWithKeys(keyRing map[uint16][]byte, defaultSecret []byte, raw []byte, cache *ReplayCache) (byte, uint32, uint16, []byte, error) {
 	if len(raw) < PacketWireLength {
-		return 0, 0, 0, ErrPacketTooShort
+		return 0, 0, 0, nil, ErrPacketTooShort
 	}
 
 	// 1. Magic header check (accepts "ORTT" or "SMTX")
 	if !bytes.Equal(raw[:4], Magic) && !bytes.Equal(raw[:4], LegacyMagic) {
-		return 0, 0, 0, ErrInvalidMagic
+		return 0, 0, 0, nil, ErrInvalidMagic
 	}
 
 	// 2. Version check (1 byte)
 	if raw[4] != ProtocolVersion {
-		return 0, 0, 0, ErrInvalidVersion
+		return 0, 0, 0, nil, ErrInvalidVersion
 	}
 
 	cmd := raw[5]
@@ -88,52 +93,61 @@ func VerifyPacketWithKeys(keyRing map[uint16][]byte, defaultSecret []byte, raw [
 	now := uint32(time.Now().Unix())
 	diff := int64(now) - int64(ts)
 	if math.Abs(float64(diff)) > MaxClockSkew.Seconds() {
-		return 0, 0, 0, ErrClockSkew
+		return 0, 0, 0, nil, ErrClockSkew
 	}
 
-	// 4. Nonce sliding-window uniqueness check
-	if cache != nil {
-		if !cache.CheckAndAdd(nonce, time.Now()) {
-			return 0, 0, 0, ErrReplayDetected
-		}
-	}
-
-	// 5. HMAC-SHA256 signature verification with multi-key fallback
+	// 4. HMAC-SHA256 signature verification BEFORE recording nonce so forged packets cannot poison ReplayCache.
 	actualSig := raw[16:32]
 	var matchedKey []byte
 
-	// 5.1 Try KeyRing by KeyID
-	if keyRing != nil && keyRing[keyID] != nil {
-		expectedSig := ComputeHMAC(keyRing[keyID], raw[:16])
-		if hmac.Equal(expectedSig, actualSig) {
-			matchedKey = keyRing[keyID]
+	if keyID >= 2 {
+		// Strict per-node KeyID isolation: never fall back to defaultSecret or other KeyIDs.
+		if keyRing != nil {
+			if candidate := keyRing[keyID]; len(candidate) > 0 {
+				expectedSig := ComputeHMAC(candidate, raw[:16])
+				if hmac.Equal(expectedSig, actualSig) {
+					matchedKey = candidate
+				}
+			}
 		}
-	}
-
-	// 5.2 Try defaultSecret if not matched yet
-	if matchedKey == nil && len(defaultSecret) > 0 {
-		expectedSig := ComputeHMAC(defaultSecret, raw[:16])
-		if hmac.Equal(expectedSig, actualSig) {
-			matchedKey = defaultSecret
+	} else {
+		// Legacy global slot (KeyID 0 or 1): only allow global KeyID 0/1 and defaultSecret.
+		if keyRing != nil {
+			if candidate := keyRing[keyID]; len(candidate) > 0 {
+				expectedSig := ComputeHMAC(candidate, raw[:16])
+				if hmac.Equal(expectedSig, actualSig) {
+					matchedKey = candidate
+				}
+			}
 		}
-	}
-
-	// 5.3 Fallback: iterate remaining keys in keyRing
-	if matchedKey == nil && keyRing != nil {
-		for _, candidate := range keyRing {
-			expectedSig := ComputeHMAC(candidate, raw[:16])
+		if matchedKey == nil && len(defaultSecret) > 0 {
+			expectedSig := ComputeHMAC(defaultSecret, raw[:16])
 			if hmac.Equal(expectedSig, actualSig) {
-				matchedKey = candidate
-				break
+				matchedKey = defaultSecret
+			}
+		}
+		if matchedKey == nil && keyID == 0 && keyRing != nil {
+			if candidate := keyRing[DefaultKeyID]; len(candidate) > 0 {
+				expectedSig := ComputeHMAC(candidate, raw[:16])
+				if hmac.Equal(expectedSig, actualSig) {
+					matchedKey = candidate
+				}
 			}
 		}
 	}
 
-
-
 	if matchedKey == nil {
-		return 0, 0, 0, ErrHMACMismatch
+		return 0, 0, 0, nil, ErrHMACMismatch
 	}
 
-	return cmd, ts, keyID, nil
+	// 5. Nonce sliding-window uniqueness check
+	if cache != nil {
+		if !cache.CheckAndAdd(nonce, time.Now()) {
+			return 0, 0, 0, nil, ErrReplayDetected
+		}
+	}
+
+	secretCopy := make([]byte, len(matchedKey))
+	copy(secretCopy, matchedKey)
+	return cmd, ts, keyID, secretCopy, nil
 }
