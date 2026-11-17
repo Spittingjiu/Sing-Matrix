@@ -126,12 +126,13 @@ func CompileToSingbox(uiData UIData) (Config, error) {
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag
 		case "inbound-reality":
-			dest := str(node.Data, "dest", str(node.Data, "server_name", "www.apple.com"))
+			dest := str(node.Data, "dest", "")
+			sni := str(node.Data, "server_name", str(node.Data, "sni", ""))
 			port := PickAvailablePortOwned(num(node.Data, "port", 0), usedPorts, ownedPorts)
 			if port == 0 {
 				return cfg, fmt.Errorf("no available port for %s", node.ID)
 			}
-			in := NewRealityInbound(tagOf(node), port, safeUUID(str(node.Data, "uuid", "")), str(node.Data, "private_key", ""), str(node.Data, "public_key", ""), firstShortID(node.Data), dest)
+			in := NewRealityInboundWithTarget(tagOf(node), port, safeUUID(str(node.Data, "uuid", "")), str(node.Data, "private_key", ""), str(node.Data, "public_key", ""), firstShortID(node.Data), dest, sni)
 			in = withFinalMaskTransport(in, finalMaskOf(node.Data))
 			cfg.Inbounds = append(cfg.Inbounds, in)
 			inboundTags[node.ID] = in.Tag

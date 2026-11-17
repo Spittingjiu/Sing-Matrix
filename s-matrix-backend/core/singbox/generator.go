@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -95,7 +97,63 @@ type RouteRule struct {
 	Port     []int  `json:"port,omitempty"`
 }
 
+func splitHostPortDefault(raw string, defaultPort int) (string, int) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", defaultPort
+	}
+	if h, pStr, err := net.SplitHostPort(raw); err == nil {
+		p, errP := strconv.Atoi(strings.TrimSpace(pStr))
+		if errP != nil || p <= 0 || p > 65535 {
+			p = defaultPort
+		}
+		return strings.TrimSpace(h), p
+	}
+	if strings.Count(raw, ":") == 1 {
+		parts := strings.SplitN(raw, ":", 2)
+		h := strings.TrimSpace(parts[0])
+		p, errP := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if errP == nil && p > 0 && p <= 65535 {
+			return h, p
+		}
+		return h, defaultPort
+	}
+	return strings.Trim(raw, "[]"), defaultPort
+}
+
+func ParseRealityTarget(destRaw, sniRaw string) (handshakeHost string, handshakePort int, sni string) {
+	destHost, destPort := splitHostPortDefault(destRaw, 0)
+	sniHost, sniPort := splitHostPortDefault(sniRaw, 0)
+
+	handshakeHost = destHost
+	if handshakeHost == "" {
+		handshakeHost = sniHost
+	}
+	if handshakeHost == "" {
+		handshakeHost = "www.apple.com"
+	}
+
+	handshakePort = destPort
+	if handshakePort <= 0 {
+		handshakePort = sniPort
+	}
+	if handshakePort <= 0 {
+		handshakePort = 443
+	}
+
+	sni = sniHost
+	if sni == "" {
+		sni = handshakeHost
+	}
+	return handshakeHost, handshakePort, sni
+}
+
 func NewRealityInbound(tag string, port int, uuid string, privateKey string, publicKey string, shortID string, serverName string) Inbound {
+	return NewRealityInboundWithTarget(tag, port, uuid, privateKey, publicKey, shortID, "", serverName)
+}
+
+func NewRealityInboundWithTarget(tag string, port int, uuid string, privateKey string, publicKey string, shortID string, dest string, serverName string) Inbound {
+	handshakeHost, handshakePort, sni := ParseRealityTarget(dest, serverName)
 	return Inbound{
 		Type:       "vless",
 		Tag:        tag,
@@ -104,12 +162,12 @@ func NewRealityInbound(tag string, port int, uuid string, privateKey string, pub
 		Users:      []User{{UUID: uuid, Flow: "xtls-rprx-vision"}},
 		TLS: map[string]interface{}{
 			"enabled":     true,
-			"server_name": serverName,
+			"server_name": sni,
 			"reality": map[string]interface{}{
 				"enabled": true,
 				"handshake": map[string]interface{}{
-					"server":      serverName,
-					"server_port": 443,
+					"server":      handshakeHost,
+					"server_port": handshakePort,
 				},
 				"private_key": privateKey,
 				"short_id":    []string{shortID},

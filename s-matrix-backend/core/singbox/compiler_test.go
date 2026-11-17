@@ -157,3 +157,74 @@ func TestCompileVMessWSTLS(t *testing.T) {
 		t.Fatalf("vmess user must not carry a security field: %s", raw)
 	}
 }
+
+func TestCompileRealityStripsPortFromDestAndSNI(t *testing.T) {
+	priv, pub, err := GenerateRealityKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := UINode{
+		ID:   "r1",
+		Kind: "inbound-reality",
+		Data: map[string]interface{}{
+			"tag":         "REALITY-1",
+			"port":        41001,
+			"uuid":        "11111111-2222-4333-8444-555555555555",
+			"private_key": priv,
+			"public_key":  pub,
+			"short_id":    "a1b2c3d4",
+			"dest":        "docs.aws.amazon.com:443",
+			"server_name": "docs.aws.amazon.com:443",
+		},
+	}
+	cfg, err := CompileToSingbox(UIData{Nodes: []UINode{node}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Inbounds) != 1 {
+		t.Fatalf("expected 1 inbound, got %d", len(cfg.Inbounds))
+	}
+	tlsMap := cfg.Inbounds[0].TLS
+	if sni, _ := tlsMap["server_name"].(string); sni != "docs.aws.amazon.com" {
+		t.Fatalf("expected clean server_name without :443, got %q", sni)
+	}
+	realityMap, _ := tlsMap["reality"].(map[string]interface{})
+	hsMap, _ := realityMap["handshake"].(map[string]interface{})
+	if srv, _ := hsMap["server"].(string); srv != "docs.aws.amazon.com" {
+		t.Fatalf("expected clean handshake.server without :443, got %q", srv)
+	}
+	if p, _ := hsMap["server_port"].(int); p != 443 {
+		t.Fatalf("expected handshake.server_port=443, got %v", hsMap["server_port"])
+	}
+
+	// Custom handshake port with explicit different SNI.
+	node2 := UINode{
+		ID:   "r2",
+		Kind: "inbound-reality",
+		Data: map[string]interface{}{
+			"tag":         "REALITY-2",
+			"port":        41002,
+			"uuid":        "11111111-2222-4333-8444-555555555555",
+			"private_key": priv,
+			"public_key":  pub,
+			"short_id":    "a1b2c3d4",
+			"dest":        "1.2.3.4:8443",
+			"server_name": "www.apple.com",
+		},
+	}
+	cfg2, err := CompileToSingbox(UIData{Nodes: []UINode{node2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tls2 := cfg2.Inbounds[0].TLS
+	if sni, _ := tls2["server_name"].(string); sni != "www.apple.com" {
+		t.Fatalf("expected server_name=www.apple.com, got %q", sni)
+	}
+	hs2 := tls2["reality"].(map[string]interface{})["handshake"].(map[string]interface{})
+	if srv, _ := hs2["server"].(string); srv != "1.2.3.4" {
+		t.Fatalf("expected handshake.server=1.2.3.4, got %q", srv)
+	}
+	if p, _ := hs2["server_port"].(int); p != 8443 {
+		t.Fatalf("expected handshake.server_port=8443, got %v", hs2["server_port"])
+	}
+}

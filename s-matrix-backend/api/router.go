@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os/exec"
 	"regexp"
@@ -70,6 +71,7 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 		RefreshOrttKeyRing(dep.DB)
 		secured.GET("/inbounds", ListInboundsHandler(dep.DB))
 		secured.POST("/inbounds", CreateInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
+		secured.PUT("/inbounds/:id", UpdateInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
 		secured.POST("/inbounds/:id/toggle", ToggleInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
 		secured.PUT("/inbounds/:id/rename", RenameInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
 		secured.DELETE("/inbounds/:id", DeleteInboundHandler(dep.DB, dep.Manager, dep.ConfigPath))
@@ -78,6 +80,9 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 		secured.POST("/inbounds/:id/ortt/toggle", OrttToggleHandler(dep.DB, dep.ConfigPath))
 	}
 	secured.POST("/singbox/compile", func(c *gin.Context) {
+		inboundOpMu.Lock()
+		defer inboundOpMu.Unlock()
+
 		var ui singbox.UIData
 		if err := c.ShouldBindJSON(&ui); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -172,6 +177,15 @@ func NewRouter(deps ...RouterDeps) *gin.Engine {
 						}
 						if sids, ok := r["short_id"].([]string); ok && len(sids) > 0 {
 							payload["short_id"] = sids[0]
+						}
+						if hs, ok := r["handshake"].(map[string]interface{}); ok {
+							if hsServer, _ := hs["server"].(string); hsServer != "" {
+								hsPort, _ := hs["server_port"].(int)
+								if hsPort <= 0 {
+									hsPort = 443
+								}
+								payload["dest"] = fmt.Sprintf("%s:%d", hsServer, hsPort)
+							}
 						}
 					}
 				}
